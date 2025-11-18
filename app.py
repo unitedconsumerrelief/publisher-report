@@ -97,6 +97,73 @@ async def healthcheck():
     return {"status": "ok", "message": "Ringba → Google Sheets sync is running"}
 
 
+@app.get("/debug-ringba")
+async def debug_ringba(
+    report_start: Optional[str] = Query("2025-11-18T00:00:00Z", description="Start date in ISO format"),
+    report_end: Optional[str] = Query("2025-11-18T23:59:59Z", description="End date in ISO format")
+):
+    """
+    Debug endpoint to see the raw Ringba API response.
+    This helps us understand the response structure.
+    """
+    try:
+        from httpx import Client
+        
+        request_body = {
+            "reportStart": report_start,
+            "reportEnd": report_end,
+            "groupByColumns": [
+                {
+                    "column": "publisherName",
+                    "displayName": "Publisher"
+                }
+            ],
+            "valueColumns": [
+                {
+                    "column": "payoutAmount",
+                    "aggregateFunction": None
+                }
+            ],
+            "orderByColumns": [
+                {
+                    "column": "payoutAmount",
+                    "direction": "desc"
+                }
+            ],
+            "formatTimespans": True,
+            "formatPercentages": True,
+            "generateRollups": True,
+            "maxResultsPerGroup": 1000,
+            "filters": [],
+            "formatTimeZone": "America/Los_Angeles"
+        }
+        
+        url = f"https://api.ringba.com/v2/{ringba_client.account_id}/insights"
+        headers = ringba_client.headers
+        
+        with Client(timeout=30.0) as client:
+            response = client.post(url, json=request_body, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "response_keys": list(data.keys()) if isinstance(data, dict) else "Not a dict",
+                    "response_type": type(data).__name__,
+                    "response_preview": str(data)[:2000],  # First 2000 chars
+                    "full_response": data
+                }
+            )
+    except Exception as e:
+        logger.exception("Debug endpoint error")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)}
+        )
+
+
 @app.get("/sync-publisher-payouts")
 @app.post("/sync-publisher-payouts")
 async def sync_publisher_payouts(
