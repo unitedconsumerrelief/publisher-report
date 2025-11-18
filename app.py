@@ -96,7 +96,7 @@ async def run_end_of_day_report():
             )
         
         if all_publishers:
-            sheets_client.write_publisher_payouts(all_publishers, clear_existing=True)
+            sheets_client.write_publisher_payouts(all_publishers, clear_existing=False)
             logger.info(f"End-of-day report completed: {len(all_publishers)} publishers synced")
         else:
             logger.warning("End-of-day report: No publisher data found")

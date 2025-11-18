@@ -140,8 +140,33 @@ class GoogleSheetsClient:
             ]
             rows.append(row)
 
-        # Write all rows at once (starting from row 2, after header)
+        # Write rows - append if not clearing, overwrite if clearing
         if rows:
-            range_name = f"2:{len(rows) + 1}"
-            self.sheet.update(range_name, rows, value_input_option="RAW")
-            logger.info(f"Wrote {len(rows)} publisher rows to sheet")
+            if clear_existing:
+                # Overwrite starting from row 2
+                range_name = f"2:{len(rows) + 1}"
+                self.sheet.update(range_name, rows, value_input_option="RAW")
+                logger.info(f"Wrote {len(rows)} publisher rows to sheet (overwritten)")
+            else:
+                # Append to the end of existing data
+                try:
+                    # Get all existing values to find the last row
+                    all_values = self.sheet.get_all_values()
+                    next_row = len(all_values) + 1
+                    
+                    # Append rows starting from next_row
+                    if next_row == 2:
+                        # No data yet, start from row 2
+                        range_name = f"2:{len(rows) + 1}"
+                        self.sheet.update(range_name, rows, value_input_option="RAW")
+                    else:
+                        # Append after existing data
+                        range_name = f"{next_row}:{next_row + len(rows) - 1}"
+                        self.sheet.update(range_name, rows, value_input_option="RAW")
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (starting at row {next_row})")
+                except Exception as e:
+                    logger.warning(f"Could not append data, trying direct append: {e}")
+                    # Fallback: use append_row for each row
+                    for row in rows:
+                        self.sheet.append_row(row, value_input_option="RAW")
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row)")
