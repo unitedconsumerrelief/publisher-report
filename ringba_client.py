@@ -104,18 +104,82 @@ class RingbaClient:
                 response.raise_for_status()
                 data = response.json()
                 
+                # Log the full response structure for debugging
+                logger.info(f"Ringba API response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+                logger.debug(f"Ringba API full response: {data}")
+                
                 # Extract publisher and payout data from response
                 publishers = []
-                if "groups" in data:
-                    for group in data["groups"]:
-                        publisher_name = group.get("publisherName", "Unknown")
-                        payout_amount = group.get("payoutAmount", 0)
-                        publishers.append({
-                            "Publisher": publisher_name,
-                            "Payout": payout_amount
-                        })
+                
+                # Try different possible response structures
+                if isinstance(data, dict):
+                    # Check for "groups" array
+                    if "groups" in data and isinstance(data["groups"], list):
+                        for group in data["groups"]:
+                            if isinstance(group, dict):
+                                # Try different field name variations
+                                publisher_name = (
+                                    group.get("publisherName") or 
+                                    group.get("Publisher") or 
+                                    group.get("publisher") or
+                                    group.get("name") or
+                                    "Unknown"
+                                )
+                                payout_amount = (
+                                    group.get("payoutAmount") or 
+                                    group.get("Payout") or 
+                                    group.get("payout") or
+                                    group.get("amount") or
+                                    0
+                                )
+                                if publisher_name != "Unknown" or payout_amount != 0:
+                                    publishers.append({
+                                        "Publisher": publisher_name,
+                                        "Payout": payout_amount
+                                    })
+                    
+                    # Check if data itself is an array
+                    elif isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict):
+                                publisher_name = (
+                                    item.get("publisherName") or 
+                                    item.get("Publisher") or 
+                                    item.get("publisher") or
+                                    item.get("name") or
+                                    "Unknown"
+                                )
+                                payout_amount = (
+                                    item.get("payoutAmount") or 
+                                    item.get("Payout") or 
+                                    item.get("payout") or
+                                    item.get("amount") or
+                                    0
+                                )
+                                if publisher_name != "Unknown" or payout_amount != 0:
+                                    publishers.append({
+                                        "Publisher": publisher_name,
+                                        "Payout": payout_amount
+                                    })
+                    
+                    # Check for nested data structures
+                    elif "data" in data:
+                        logger.info("Found 'data' key in response, checking nested structure")
+                        nested_data = data["data"]
+                        if isinstance(nested_data, list):
+                            for item in nested_data:
+                                if isinstance(item, dict):
+                                    publisher_name = item.get("publisherName") or item.get("Publisher") or "Unknown"
+                                    payout_amount = item.get("payoutAmount") or item.get("Payout") or 0
+                                    if publisher_name != "Unknown" or payout_amount != 0:
+                                        publishers.append({
+                                            "Publisher": publisher_name,
+                                            "Payout": payout_amount
+                                        })
                 
                 logger.info(f"Retrieved {len(publishers)} publishers from Ringba")
+                if len(publishers) == 0:
+                    logger.warning(f"No publishers found. Response structure: {str(data)[:500]}")
                 return publishers
                 
         except httpx.HTTPStatusError as e:
