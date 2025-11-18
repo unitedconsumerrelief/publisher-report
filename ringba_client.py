@@ -124,6 +124,9 @@ class RingbaClient:
                     if isinstance(report, dict) and "records" in report:
                         records = report["records"]
                         if isinstance(records, list):
+                            # Use a dict to deduplicate and aggregate by (Date, Publisher, Campaign)
+                            publishers_dict = {}
+                            
                             for record in records:
                                 if isinstance(record, dict):
                                     # Skip records without publisherName (like totals/rollups)
@@ -131,8 +134,8 @@ class RingbaClient:
                                     if not publisher_name:
                                         continue
                                     
-                                    # Get campaign name
-                                    campaign_name = record.get("campaignName", "")
+                                    # Get campaign name (normalize empty to empty string)
+                                    campaign_name = record.get("campaignName", "").strip() if record.get("campaignName") else ""
                                     
                                     # payoutAmount comes as a string, convert to float
                                     payout_amount_str = record.get("payoutAmount", "0")
@@ -141,14 +144,24 @@ class RingbaClient:
                                     except (ValueError, TypeError):
                                         payout_amount = 0.0
                                     
-                                    publishers.append({
-                                        "Publisher": publisher_name,
-                                        "Campaign": campaign_name,
-                                        "Payout": payout_amount,
-                                        "Date": report_date
-                                    })
+                                    # Create a unique key for deduplication
+                                    key = (report_date, publisher_name, campaign_name)
+                                    
+                                    # If this combination already exists, sum the payouts
+                                    if key in publishers_dict:
+                                        publishers_dict[key]["Payout"] += payout_amount
+                                    else:
+                                        publishers_dict[key] = {
+                                            "Publisher": publisher_name,
+                                            "Campaign": campaign_name,
+                                            "Payout": payout_amount,
+                                            "Date": report_date
+                                        }
+                            
+                            # Convert dict to list
+                            publishers = list(publishers_dict.values())
                 
-                logger.info(f"Retrieved {len(publishers)} publishers from Ringba")
+                logger.info(f"Retrieved {len(publishers)} unique publishers from Ringba (after deduplication)")
                 if len(publishers) == 0:
                     logger.warning(f"No publishers found. Response structure: {str(data)[:500]}")
                 return publishers
