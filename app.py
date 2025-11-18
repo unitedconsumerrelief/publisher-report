@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
+from pytz import timezone, UTC
 
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -39,19 +40,64 @@ async def run_end_of_day_report():
     """Scheduled task to run end-of-day report."""
     logger.info("Running scheduled end-of-day report")
     try:
-        # Calculate yesterday's date range (4 AM to 3:59:59 AM next day)
-        yesterday = datetime.utcnow() - timedelta(days=1)
-        report_start = yesterday.replace(hour=4, minute=0, second=0, microsecond=0).isoformat() + "Z"
-        report_end = datetime.utcnow().replace(hour=3, minute=59, second=59, microsecond=999999).isoformat() + "Z"
+        # Get current date in EST timezone
+        est = timezone('America/New_York')
+        now_est = datetime.now(est)
+        current_weekday = now_est.weekday()  # 0=Monday, 6=Sunday
         
-        publishers = ringba_client.get_publisher_payouts(
-            report_start=report_start,
-            report_end=report_end
-        )
+        all_publishers = []
         
-        if publishers:
-            sheets_client.write_publisher_payouts(publishers, clear_existing=True)
-            logger.info(f"End-of-day report completed: {len(publishers)} publishers synced")
+        if current_weekday == 0:  # Monday - pull Friday, Saturday, Sunday
+            logger.info("Monday detected - pulling weekend data (Friday, Saturday, Sunday)")
+            # Friday (3 days ago)
+            friday = now_est - timedelta(days=3)
+            friday_start = friday.replace(hour=0, minute=0, second=0, microsecond=0)
+            friday_end = friday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Saturday (2 days ago)
+            saturday = now_est - timedelta(days=2)
+            saturday_start = saturday.replace(hour=0, minute=0, second=0, microsecond=0)
+            saturday_end = saturday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Sunday (yesterday)
+            sunday = now_est - timedelta(days=1)
+            sunday_start = sunday.replace(hour=0, minute=0, second=0, microsecond=0)
+            sunday_end = sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Convert to UTC for API calls
+            for day_name, day_start, day_end in [
+                ("Friday", friday_start, friday_end),
+                ("Saturday", saturday_start, saturday_end),
+                ("Sunday", sunday_start, sunday_end)
+            ]:
+                day_start_utc = day_start.astimezone(UTC)
+                day_end_utc = day_end.astimezone(UTC)
+                
+                logger.info(f"Pulling {day_name} data: {day_start_utc.date()}")
+                publishers = ringba_client.get_publisher_payouts(
+                    report_start=day_start_utc.isoformat().replace('+00:00', 'Z'),
+                    report_end=day_end_utc.isoformat().replace('+00:00', 'Z')
+                )
+                all_publishers.extend(publishers)
+        else:
+            # Tuesday-Friday - pull previous day
+            logger.info(f"Weekday detected ({now_est.strftime('%A')}) - pulling previous day data")
+            yesterday = now_est - timedelta(days=1)
+            report_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+            report_end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Convert to UTC for API calls
+            report_start_utc = report_start.astimezone(UTC)
+            report_end_utc = report_end.astimezone(UTC)
+            
+            all_publishers = ringba_client.get_publisher_payouts(
+                report_start=report_start_utc.isoformat().replace('+00:00', 'Z'),
+                report_end=report_end_utc.isoformat().replace('+00:00', 'Z')
+            )
+        
+        if all_publishers:
+            sheets_client.write_publisher_payouts(all_publishers, clear_existing=True)
+            logger.info(f"End-of-day report completed: {len(all_publishers)} publishers synced")
         else:
             logger.warning("End-of-day report: No publisher data found")
             
@@ -68,16 +114,15 @@ async def lifespan(app: FastAPI):
     
     if enable_scheduler:
         # Startup: Schedule end-of-day report
-        # Run at 4:05 AM UTC (adjust timezone as needed)
-        # This ensures all data from the previous day is finalized
+        # Run at 9:00 AM EST on weekdays (Monday-Friday)
         scheduler.add_job(
             run_end_of_day_report,
-            trigger=CronTrigger(hour=4, minute=5, timezone="UTC"),
+            trigger=CronTrigger(hour=9, minute=0, day_of_week='mon-fri', timezone="America/New_York"),
             id="end_of_day_report",
             replace_existing=True
         )
         scheduler.start()
-        logger.info("Scheduler started - End-of-day report scheduled for 4:05 AM UTC daily")
+        logger.info("Scheduler started - End-of-day report scheduled for 9:00 AM EST on weekdays (Monday-Friday)")
     else:
         logger.info("Scheduler disabled - Use external cron or manual triggers")
     
