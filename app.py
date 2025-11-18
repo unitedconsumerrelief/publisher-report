@@ -116,6 +116,10 @@ async def debug_ringba(
                 {
                     "column": "publisherName",
                     "displayName": "Publisher"
+                },
+                {
+                    "column": "campaignName",
+                    "displayName": "Campaign"
                 }
             ],
             "valueColumns": [

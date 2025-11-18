@@ -64,7 +64,7 @@ class RingbaClient:
             today = datetime.utcnow()
             report_end = today.replace(hour=3, minute=59, second=59, microsecond=999999).isoformat() + "Z"
 
-        # Simplified request body - only Publisher and Payout
+        # Request body - Publisher, Campaign, and Payout
         request_body = {
             "reportStart": report_start,
             "reportEnd": report_end,
@@ -72,6 +72,10 @@ class RingbaClient:
                 {
                     "column": "publisherName",
                     "displayName": "Publisher"
+                },
+                {
+                    "column": "campaignName",
+                    "displayName": "Campaign"
                 }
             ],
             "valueColumns": [
@@ -123,6 +127,9 @@ class RingbaClient:
                                     if not publisher_name:
                                         continue
                                     
+                                    # Get campaign name
+                                    campaign_name = record.get("campaignName", "")
+                                    
                                     # payoutAmount comes as a string, convert to float
                                     payout_amount_str = record.get("payoutAmount", "0")
                                     try:
@@ -132,6 +139,7 @@ class RingbaClient:
                                     
                                     publishers.append({
                                         "Publisher": publisher_name,
+                                        "Campaign": campaign_name,
                                         "Payout": payout_amount
                                     })
                 

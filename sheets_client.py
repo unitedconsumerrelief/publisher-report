@@ -103,15 +103,15 @@ class GoogleSheetsClient:
         Write publisher payout data to the sheet.
         
         Args:
-            publishers: List of dicts with "Publisher" and "Payout" keys
+            publishers: List of dicts with "Publisher", "Campaign", and "Payout" keys
             clear_existing: If True, clear existing data before writing (default: True)
         """
         if not publishers:
             logger.warning("No publisher data to write")
             return
 
-        # Define header order: Publisher, Payout
-        header = ["Publisher", "Payout"]
+        # Define header order: Publisher, Campaign, Payout
+        header = ["Publisher", "Campaign", "Payout"]
         
         # Set header row
         self._set_header_row(header)
@@ -134,6 +134,7 @@ class GoogleSheetsClient:
         for pub in publishers:
             row = [
                 str(pub.get("Publisher", "")),
+                str(pub.get("Campaign", "")),
                 str(pub.get("Payout", ""))
             ]
             rows.append(row)
