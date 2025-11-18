@@ -53,7 +53,7 @@ class RingbaClient:
             timezone: Timezone for the report (default: "America/Los_Angeles")
         
         Returns:
-            List of dictionaries with Publisher and Payout data
+            List of dictionaries with Publisher, Campaign, Payout, and Date data
         """
         # Default to yesterday if not provided
         if not report_start:
@@ -63,6 +63,10 @@ class RingbaClient:
         if not report_end:
             today = datetime.utcnow()
             report_end = today.replace(hour=3, minute=59, second=59, microsecond=999999).isoformat() + "Z"
+        
+        # Extract date from report_start (format: YYYY-MM-DD)
+        # report_start format: "2025-11-18T00:00:00Z" -> extract "2025-11-18"
+        report_date = report_start.split("T")[0] if "T" in report_start else report_start[:10]
 
         # Request body - Publisher, Campaign, and Payout
         request_body = {
@@ -140,7 +144,8 @@ class RingbaClient:
                                     publishers.append({
                                         "Publisher": publisher_name,
                                         "Campaign": campaign_name,
-                                        "Payout": payout_amount
+                                        "Payout": payout_amount,
+                                        "Date": report_date
                                     })
                 
                 logger.info(f"Retrieved {len(publishers)} publishers from Ringba")
