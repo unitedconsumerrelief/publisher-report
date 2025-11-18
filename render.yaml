@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ringba-payout-reporter
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: WORKSHEET_NAME
+        value: Sheet1
+        sync: false
+      - key: RINGBA_API_TOKEN
+        sync: false
+      - key: RINGBA_ACCOUNT_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: ENABLE_SCHEDULER
+        value: "true"
+        sync: false
+

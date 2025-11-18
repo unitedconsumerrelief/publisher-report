@@ -1,0 +1,29 @@
+{
+  "reportStart": "2025-11-18T04:00:00Z",
+  "reportEnd": "2025-11-19T03:59:59Z",
+  "groupByColumns": [
+    {
+      "column": "publisherName",
+      "displayName": "Publisher"
+    }
+  ],
+  "valueColumns": [
+    {
+      "column": "payoutAmount",
+      "aggregateFunction": null
+    }
+  ],
+  "orderByColumns": [
+    {
+      "column": "payoutAmount",
+      "direction": "desc"
+    }
+  ],
+  "formatTimespans": true,
+  "formatPercentages": true,
+  "generateRollups": true,
+  "maxResultsPerGroup": 1000,
+  "filters": [],
+  "formatTimeZone": "America/Los_Angeles"
+}
+
