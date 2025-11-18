@@ -126,6 +126,8 @@ class RingbaClient:
                         if isinstance(records, list):
                             # Use a dict to deduplicate and aggregate by (Date, Publisher, Campaign)
                             publishers_dict = {}
+                            # Track publishers with empty campaigns to handle duplicates
+                            publishers_with_empty_campaign = set()
                             
                             for record in records:
                                 if isinstance(record, dict):
@@ -147,6 +149,10 @@ class RingbaClient:
                                     # Create a unique key for deduplication
                                     key = (report_date, publisher_name, campaign_name)
                                     
+                                    # Track if this publisher has an empty campaign
+                                    if not campaign_name:
+                                        publishers_with_empty_campaign.add((report_date, publisher_name))
+                                    
                                     # If this combination already exists, sum the payouts
                                     if key in publishers_dict:
                                         publishers_dict[key]["Payout"] += payout_amount
@@ -158,8 +164,27 @@ class RingbaClient:
                                             "Date": report_date
                                         }
                             
-                            # Convert dict to list
-                            publishers = list(publishers_dict.values())
+                            # Remove records with empty campaigns if the same publisher has records with campaign names
+                            # This prevents double-counting when Ringba returns both grouped and ungrouped data
+                            publishers_list = []
+                            for key, pub_data in publishers_dict.items():
+                                date, publisher, campaign = key
+                                
+                                # If this is an empty campaign record
+                                if not campaign:
+                                    # Check if this publisher has any records with campaign names for the same date
+                                    has_campaign_records = any(
+                                        p["Campaign"] and p["Publisher"] == publisher and p["Date"] == date
+                                        for p in publishers_dict.values()
+                                    )
+                                    # Only include empty campaign if there are no campaign records for this publisher
+                                    if not has_campaign_records:
+                                        publishers_list.append(pub_data)
+                                else:
+                                    # Always include records with campaign names
+                                    publishers_list.append(pub_data)
+                            
+                            publishers = publishers_list
                 
                 logger.info(f"Retrieved {len(publishers)} unique publishers from Ringba (after deduplication)")
                 if len(publishers) == 0:
