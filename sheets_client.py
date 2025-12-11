@@ -98,6 +98,250 @@ class GoogleSheetsClient:
         logger.info("Appending row: %s", row)
         self.sheet.append_row(row, value_input_option="RAW")
 
+    def _ensure_status_column(self) -> None:
+        """
+        Ensure the Status column (Column F) exists in the header.
+        If header doesn't have Status column, add it.
+        """
+        header = self._get_header_row()
+        
+        # Check if Status column exists (should be column index 5, which is column F)
+        # We'll check if any column contains "Status" or if we need to add it
+        has_status = any(col.lower() == "status" for col in header)
+        
+        if not has_status:
+            # Add Status column if it doesn't exist
+            # If header is empty or has fewer than 6 columns, extend it
+            while len(header) < 6:
+                header.append("")
+            # Set column F (index 5) to "Status"
+            header[5] = "Status"
+            self._set_header_row(header)
+            logger.info("Added Status column to header")
+
+    def _delete_today_live_rows(self, today_date: str) -> int:
+        """
+        Delete all rows where Date = today_date AND Status = "LIVE".
+        
+        Args:
+            today_date: Date string in YYYY-MM-DD format
+            
+        Returns:
+            Number of rows deleted
+        """
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:  # Only header or empty
+                return 0
+            
+            header = all_values[0]
+            
+            # Find column indices
+            date_col_idx = None
+            status_col_idx = None
+            
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                elif col_name.lower() == "status":
+                    status_col_idx = idx
+            
+            if date_col_idx is None:
+                logger.warning("Date column not found in header")
+                return 0
+            
+            # Collect row numbers to delete (1-indexed, but we skip header)
+            rows_to_delete = []
+            for row_idx, row in enumerate(all_values[1:], start=2):  # Start from row 2
+                # Ensure row has enough columns
+                if len(row) <= date_col_idx:
+                    continue
+                
+                row_date = str(row[date_col_idx]).strip()
+                
+                # Check if this is today's date
+                if row_date == today_date:
+                    # If Status column exists, check if it's LIVE
+                    if status_col_idx is not None and len(row) > status_col_idx:
+                        status = str(row[status_col_idx]).strip().upper()
+                        if status == "LIVE":
+                            rows_to_delete.append(row_idx)
+                    elif status_col_idx is None:
+                        # If Status column doesn't exist yet, assume all today's rows are LIVE
+                        # This handles the case where Status column was just added
+                        rows_to_delete.append(row_idx)
+            
+            # Delete rows in reverse order to maintain correct indices
+            if rows_to_delete:
+                rows_to_delete.sort(reverse=True)
+                for row_num in rows_to_delete:
+                    self.sheet.delete_rows(row_num)
+                logger.info(f"Deleted {len(rows_to_delete)} LIVE rows for date {today_date}")
+                return len(rows_to_delete)
+            
+            return 0
+            
+        except Exception as e:
+            logger.exception(f"Error deleting today's LIVE rows: {e}")
+            return 0
+
+    def write_today_hourly_payouts(self, publishers: List[Dict[str, Any]], today_date: str) -> None:
+        """
+        Write today's hourly publisher payout data, replacing any existing LIVE data for today.
+        
+        Args:
+            publishers: List of dicts with "Publisher", "Campaign", "Payout", and "Date" keys
+            today_date: Date string in YYYY-MM-DD format for today
+        """
+        if not publishers:
+            logger.warning("No publisher data to write for hourly refresh")
+            return
+
+        # Ensure Status column exists
+        self._ensure_status_column()
+        
+        # Delete existing LIVE rows for today
+        deleted_count = self._delete_today_live_rows(today_date)
+        logger.info(f"Deleted {deleted_count} existing LIVE rows for {today_date}")
+
+        # Get current header to maintain column order
+        header = self._get_header_row()
+        
+        # Ensure header has the required columns
+        required_cols = ["Date", "Publisher", "Campaign", "Payout", "Status"]
+        header_dict = {col.lower(): idx for idx, col in enumerate(header)}
+        
+        # Build rows with Status = "LIVE"
+        rows = []
+        for pub in publishers:
+            row = [""] * max(len(header), 6)  # Ensure at least 6 columns
+            
+            # Set Date
+            if "date" in header_dict:
+                row[header_dict["date"]] = str(pub.get("Date", today_date))
+            elif len(header) > 0:
+                row[0] = str(pub.get("Date", today_date))
+            
+            # Set Publisher
+            if "publisher" in header_dict:
+                row[header_dict["publisher"]] = str(pub.get("Publisher", ""))
+            elif len(header) > 1:
+                row[1] = str(pub.get("Publisher", ""))
+            
+            # Set Campaign
+            if "campaign" in header_dict:
+                row[header_dict["campaign"]] = str(pub.get("Campaign", ""))
+            elif len(header) > 2:
+                row[2] = str(pub.get("Campaign", ""))
+            
+            # Set Payout
+            if "payout" in header_dict:
+                row[header_dict["payout"]] = str(pub.get("Payout", ""))
+            elif len(header) > 3:
+                row[3] = str(pub.get("Payout", ""))
+            
+            # Set Status = "LIVE" (Column F, index 5)
+            if "status" in header_dict:
+                row[header_dict["status"]] = "LIVE"
+            else:
+                row[5] = "LIVE"
+            
+            rows.append(row)
+
+        # Append new rows
+        if rows:
+            try:
+                all_values = self.sheet.get_all_values()
+                next_row = len(all_values) + 1
+                
+                # Update header if needed to match our row structure
+                if len(header) < len(rows[0]):
+                    # Extend header
+                    while len(header) < len(rows[0]):
+                        header.append("")
+                    self._set_header_row(header)
+                
+                # Write rows
+                range_name = f"{next_row}:{next_row + len(rows) - 1}"
+                self.sheet.update(range_name, rows, value_input_option="RAW")
+                logger.info(f"Wrote {len(rows)} LIVE publisher rows for {today_date} (starting at row {next_row})")
+            except Exception as e:
+                logger.exception(f"Error writing hourly data: {e}")
+                raise
+
+    def finalize_today_data(self, today_date: str) -> int:
+        """
+        Change Status from "LIVE" to "FINAL" for all rows with today's date.
+        
+        Args:
+            today_date: Date string in YYYY-MM-DD format
+            
+        Returns:
+            Number of rows finalized
+        """
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:
+                return 0
+            
+            header = all_values[0]
+            
+            # Find column indices
+            date_col_idx = None
+            status_col_idx = None
+            
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                elif col_name.lower() == "status":
+                    status_col_idx = idx
+            
+            if date_col_idx is None:
+                logger.warning("Date column not found")
+                return 0
+            
+            if status_col_idx is None:
+                logger.warning("Status column not found - cannot finalize")
+                return 0
+            
+            # Find rows to update
+            rows_to_update = []
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) <= date_col_idx:
+                    continue
+                
+                row_date = str(row[date_col_idx]).strip()
+                if row_date == today_date:
+                    if len(row) > status_col_idx:
+                        current_status = str(row[status_col_idx]).strip().upper()
+                        if current_status == "LIVE":
+                            rows_to_update.append((row_idx, row))
+            
+            # Update rows
+            if rows_to_update:
+                updates = []
+                for row_idx, row in rows_to_update:
+                    # Ensure row has enough columns
+                    while len(row) <= status_col_idx:
+                        row.append("")
+                    row[status_col_idx] = "FINAL"
+                    updates.append((row_idx, row))
+                
+                # Batch update
+                for row_idx, row in updates:
+                    # Update just the Status column
+                    cell_address = f"{chr(65 + status_col_idx)}{row_idx}"  # Convert to A1 notation
+                    self.sheet.update(cell_address, [["FINAL"]])
+                
+                logger.info(f"Finalized {len(updates)} rows for date {today_date}")
+                return len(updates)
+            
+            return 0
+            
+        except Exception as e:
+            logger.exception(f"Error finalizing today's data: {e}")
+            return 0
+
     def write_publisher_payouts(self, publishers: List[Dict[str, Any]], clear_existing: bool = True) -> None:
         """
         Write publisher payout data to the sheet.
@@ -110,8 +354,11 @@ class GoogleSheetsClient:
             logger.warning("No publisher data to write")
             return
 
-        # Define header order: Date, Publisher, Campaign, Payout
-        header = ["Date", "Publisher", "Campaign", "Payout"]
+        # Ensure Status column exists
+        self._ensure_status_column()
+
+        # Define header order: Date, Publisher, Campaign, Payout, Status
+        header = ["Date", "Publisher", "Campaign", "Payout", "", "Status"]
         
         # Set header row
         self._set_header_row(header)
@@ -129,14 +376,16 @@ class GoogleSheetsClient:
             except Exception as e:
                 logger.warning(f"Could not clear existing data: {e}")
 
-        # Build rows
+        # Build rows with Status = "FINAL" for historical data
         rows = []
         for pub in publishers:
             row = [
                 str(pub.get("Date", "")),
                 str(pub.get("Publisher", "")),
                 str(pub.get("Campaign", "")),
-                str(pub.get("Payout", ""))
+                str(pub.get("Payout", "")),
+                "",  # Empty column (normalized date column)
+                "FINAL"  # Status column
             ]
             rows.append(row)
 
