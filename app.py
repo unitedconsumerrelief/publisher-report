@@ -72,88 +72,26 @@ async def run_hourly_refresh():
 
 
 async def run_end_of_day_report():
-    """Scheduled task to run end-of-day report."""
+    """
+    Scheduled task to finalize today's LIVE data.
+    Changes Status from "LIVE" to "FINAL" for all today's rows.
+    Historical data is already in the system from when it was "today", so we don't pull it again.
+    """
     logger.info("Running scheduled end-of-day report")
     try:
         # Get current date in EST timezone
         est = timezone('America/New_York')
         now_est = datetime.now(est)
-        current_weekday = now_est.weekday()  # 0=Monday, 6=Sunday
-        
-        # First, finalize today's LIVE data (change Status from LIVE to FINAL)
         today_date = now_est.strftime('%Y-%m-%d')
+        
+        # Finalize today's LIVE data (change Status from LIVE to FINAL)
+        # This is the final update for today - the data is already accurate from hourly pulls
         finalized_count = sheets_client.finalize_today_data(today_date)
-        logger.info(f"Finalized {finalized_count} LIVE rows for {today_date}")
         
-        all_publishers = []
-        
-        if current_weekday == 0:  # Monday - pull Friday, Saturday, Sunday
-            logger.info("Monday detected - pulling weekend data (Friday, Saturday, Sunday)")
-            # Friday (3 days ago)
-            friday = now_est - timedelta(days=3)
-            friday_start = friday.replace(hour=0, minute=0, second=0, microsecond=0)
-            friday_end = friday.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            # Saturday (2 days ago)
-            saturday = now_est - timedelta(days=2)
-            saturday_start = saturday.replace(hour=0, minute=0, second=0, microsecond=0)
-            saturday_end = saturday.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            # Sunday (yesterday)
-            sunday = now_est - timedelta(days=1)
-            sunday_start = sunday.replace(hour=0, minute=0, second=0, microsecond=0)
-            sunday_end = sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            # Convert to UTC for API calls
-            for day_name, day_start, day_end in [
-                ("Friday", friday_start, friday_end),
-                ("Saturday", saturday_start, saturday_end),
-                ("Sunday", sunday_start, sunday_end)
-            ]:
-                day_start_utc = day_start.astimezone(UTC)
-                day_end_utc = day_end.astimezone(UTC)
-                
-                logger.info(f"Pulling {day_name} data: {day_start_utc.date()}")
-                publishers = ringba_client.get_publisher_payouts(
-                    report_start=day_start_utc.isoformat().replace('+00:00', 'Z'),
-                    report_end=day_end_utc.isoformat().replace('+00:00', 'Z')
-                )
-                all_publishers.extend(publishers)
+        if finalized_count > 0:
+            logger.info(f"End-of-day report completed: Finalized {finalized_count} LIVE rows for {today_date} (Status changed to FINAL)")
         else:
-            # Tuesday-Friday - pull previous day
-            logger.info(f"Weekday detected ({now_est.strftime('%A')}) - pulling previous day data")
-            yesterday = now_est - timedelta(days=1)
-            report_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-            report_end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            # Convert to UTC for API calls
-            report_start_utc = report_start.astimezone(UTC)
-            report_end_utc = report_end.astimezone(UTC)
-            
-            all_publishers = ringba_client.get_publisher_payouts(
-                report_start=report_start_utc.isoformat().replace('+00:00', 'Z'),
-                report_end=report_end_utc.isoformat().replace('+00:00', 'Z')
-            )
-        
-        if all_publishers:
-            # Safety check: Filter out any publishers with today's date (shouldn't happen, but be safe)
-            # Today's data should already be finalized above, not pulled again
-            filtered_publishers = [
-                pub for pub in all_publishers 
-                if str(pub.get("Date", "")).strip() != today_date
-            ]
-            
-            if len(filtered_publishers) < len(all_publishers):
-                logger.warning(f"Filtered out {len(all_publishers) - len(filtered_publishers)} publishers with today's date from historical data")
-            
-            if filtered_publishers:
-                # Write historical data with deduplication (clear_existing=False will check for duplicates)
-                sheets_client.write_publisher_payouts(filtered_publishers, clear_existing=False)
-                logger.info(f"End-of-day report completed: {len(filtered_publishers)} historical publishers synced (today's data already finalized)")
-            else:
-                logger.warning("End-of-day report: No historical publisher data to write after filtering")
-        else:
-            logger.warning("End-of-day report: No publisher data found")
+            logger.warning(f"End-of-day report: No LIVE rows found to finalize for {today_date}")
             
     except Exception as e:
         logger.exception(f"Failed to run end-of-day report: {e}")
