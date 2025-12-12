@@ -338,6 +338,59 @@ async def sync_today_hourly():
         ) from e
 
 
+@app.get("/finalize-date")
+@app.post("/finalize-date")
+async def finalize_date(
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)")
+):
+    """
+    Manually finalize LIVE data for a specific date.
+    Changes Status from "LIVE" to "FINAL" for all rows with the specified date.
+    
+    Query Parameters:
+        date: Optional date in YYYY-MM-DD format (defaults to today)
+    """
+    try:
+        if date:
+            target_date = date
+        else:
+            # Default to today
+            est = timezone('America/New_York')
+            now_est = datetime.now(est)
+            target_date = now_est.strftime('%Y-%m-%d')
+        
+        # Validate date format
+        try:
+            datetime.strptime(target_date, '%Y-%m-%d')
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Use YYYY-MM-DD format. Got: {target_date}"
+            )
+        
+        # Finalize LIVE data for the specified date
+        finalized_count = sheets_client.finalize_today_data(target_date)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Finalized {finalized_count} LIVE rows for {target_date}",
+                "date": target_date,
+                "rows_finalized": finalized_count
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to finalize date")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to finalize date: {str(e)}"
+        ) from e
+
+
 @app.post("/ringba-webhook")
 async def ringba_webhook(request: Request):
     """
