@@ -136,8 +136,22 @@ async def run_end_of_day_report():
             )
         
         if all_publishers:
-            sheets_client.write_publisher_payouts(all_publishers, clear_existing=False)
-            logger.info(f"End-of-day report completed: {len(all_publishers)} publishers synced")
+            # Safety check: Filter out any publishers with today's date (shouldn't happen, but be safe)
+            # Today's data should already be finalized above, not pulled again
+            filtered_publishers = [
+                pub for pub in all_publishers 
+                if str(pub.get("Date", "")).strip() != today_date
+            ]
+            
+            if len(filtered_publishers) < len(all_publishers):
+                logger.warning(f"Filtered out {len(all_publishers) - len(filtered_publishers)} publishers with today's date from historical data")
+            
+            if filtered_publishers:
+                # Write historical data with deduplication (clear_existing=False will check for duplicates)
+                sheets_client.write_publisher_payouts(filtered_publishers, clear_existing=False)
+                logger.info(f"End-of-day report completed: {len(filtered_publishers)} historical publishers synced (today's data already finalized)")
+            else:
+                logger.warning("End-of-day report: No historical publisher data to write after filtering")
         else:
             logger.warning("End-of-day report: No publisher data found")
             

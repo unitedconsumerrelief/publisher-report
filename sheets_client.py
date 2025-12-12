@@ -269,6 +269,75 @@ class GoogleSheetsClient:
                 logger.exception(f"Error writing hourly data: {e}")
                 raise
 
+    def finalize_live_data_for_dates(self, dates: List[str]) -> int:
+        """
+        Change Status from "LIVE" to "FINAL" for all rows with the specified dates.
+        
+        Args:
+            dates: List of date strings in YYYY-MM-DD format
+            
+        Returns:
+            Number of rows finalized
+        """
+        if not dates:
+            return 0
+            
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:
+                return 0
+            
+            header = all_values[0]
+            
+            # Find column indices
+            date_col_idx = None
+            status_col_idx = None
+            
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                elif col_name.lower() == "status":
+                    status_col_idx = idx
+            
+            if date_col_idx is None:
+                logger.warning("Date column not found")
+                return 0
+            
+            if status_col_idx is None:
+                logger.warning("Status column not found - cannot finalize")
+                return 0
+            
+            dates_set = set(dates)  # For faster lookup
+            
+            # Find rows to update
+            rows_to_update = []
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) <= date_col_idx:
+                    continue
+                
+                row_date = str(row[date_col_idx]).strip()
+                if row_date in dates_set:
+                    if len(row) > status_col_idx:
+                        current_status = str(row[status_col_idx]).strip().upper()
+                        if current_status == "LIVE":
+                            rows_to_update.append((row_idx, row))
+            
+            # Update rows
+            if rows_to_update:
+                for row_idx, row in rows_to_update:
+                    # Update just the Status column
+                    cell_address = f"{chr(65 + status_col_idx)}{row_idx}"  # Convert to A1 notation
+                    self.sheet.update(cell_address, [["FINAL"]])
+                
+                logger.info(f"Finalized {len(rows_to_update)} LIVE rows for dates: {dates}")
+                return len(rows_to_update)
+            
+            return 0
+            
+        except Exception as e:
+            logger.exception(f"Error finalizing LIVE data: {e}")
+            return 0
+
     def finalize_today_data(self, today_date: str) -> int:
         """
         Change Status from "LIVE" to "FINAL" for all rows with today's date.
@@ -279,6 +348,7 @@ class GoogleSheetsClient:
         Returns:
             Number of rows finalized
         """
+        return self.finalize_live_data_for_dates([today_date])
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) <= 1:
@@ -397,25 +467,66 @@ class GoogleSheetsClient:
                 self.sheet.update(range_name, rows, value_input_option="RAW")
                 logger.info(f"Wrote {len(rows)} publisher rows to sheet (overwritten)")
             else:
-                # Append to the end of existing data
+                # When appending historical data, we need to:
+                # 1. Finalize any LIVE data for the dates we're about to write
+                # 2. Delete ALL existing rows for those dates (to prevent duplicates)
+                # 3. Then write fresh data
                 try:
-                    # Get all existing values to find the last row
                     all_values = self.sheet.get_all_values()
-                    next_row = len(all_values) + 1
-                    
-                    # Append rows starting from next_row
-                    if next_row == 2:
-                        # No data yet, start from row 2
+                    if len(all_values) <= 1:
+                        # No existing data, just write
                         range_name = f"2:{len(rows) + 1}"
                         self.sheet.update(range_name, rows, value_input_option="RAW")
+                        logger.info(f"Wrote {len(rows)} publisher rows to sheet (no existing data)")
                     else:
-                        # Append after existing data
+                        # Get the dates we're about to write
+                        dates_to_process = set()
+                        for pub in publishers:
+                            pub_date = str(pub.get("Date", "")).strip()
+                            if pub_date:
+                                dates_to_process.add(pub_date)
+                        
+                        # Step 1: Finalize any LIVE data for these dates
+                        if dates_to_process:
+                            finalized_count = self.finalize_live_data_for_dates(list(dates_to_process))
+                            if finalized_count > 0:
+                                logger.info(f"Finalized {finalized_count} LIVE rows before writing historical data")
+                            
+                            # Step 2: Delete ALL existing rows for these dates (both LIVE and FINAL)
+                            # This ensures we don't have duplicates
+                            header = all_values[0]
+                            date_col_idx = None
+                            
+                            for idx, col_name in enumerate(header):
+                                if col_name.lower() == "date":
+                                    date_col_idx = idx
+                                    break
+                            
+                            if date_col_idx is not None:
+                                rows_to_delete = []
+                                for row_idx, row in enumerate(all_values[1:], start=2):
+                                    if len(row) > date_col_idx:
+                                        row_date = str(row[date_col_idx]).strip()
+                                        if row_date in dates_to_process:
+                                            rows_to_delete.append(row_idx)
+                                
+                                # Delete rows in reverse order
+                                if rows_to_delete:
+                                    rows_to_delete.sort(reverse=True)
+                                    for row_num in rows_to_delete:
+                                        self.sheet.delete_rows(row_num)
+                                    logger.info(f"Deleted {len(rows_to_delete)} existing rows for dates {dates_to_process} before writing fresh data")
+                        
+                        # Step 3: Append the new rows
+                        all_values = self.sheet.get_all_values()  # Refresh after deletions
+                        next_row = len(all_values) + 1
                         range_name = f"{next_row}:{next_row + len(rows) - 1}"
                         self.sheet.update(range_name, rows, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} publisher rows to sheet (starting at row {next_row})")
+                        logger.info(f"Wrote {len(rows)} fresh publisher rows to sheet (starting at row {next_row}, old data removed)")
+                        
                 except Exception as e:
-                    logger.warning(f"Could not append data, trying direct append: {e}")
+                    logger.warning(f"Could not append data with deduplication, trying direct append: {e}")
                     # Fallback: use append_row for each row
                     for row in rows:
                         self.sheet.append_row(row, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row)")
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row fallback)")
