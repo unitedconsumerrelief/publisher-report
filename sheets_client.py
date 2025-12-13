@@ -185,9 +185,58 @@ class GoogleSheetsClient:
             logger.exception(f"Error deleting today's LIVE rows: {e}")
             return 0
 
+    def _has_finalized_data_for_date(self, target_date: str) -> bool:
+        """
+        Check if there are any FINAL rows for the specified date.
+        
+        Args:
+            target_date: Date string in YYYY-MM-DD format
+            
+        Returns:
+            True if there are FINAL rows for this date, False otherwise
+        """
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:
+                return False
+            
+            header = all_values[0]
+            
+            # Find column indices
+            date_col_idx = None
+            status_col_idx = None
+            
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                elif col_name.lower() == "status":
+                    status_col_idx = idx
+            
+            if date_col_idx is None or status_col_idx is None:
+                return False
+            
+            # Check if there are any FINAL rows for this date
+            for row in all_values[1:]:
+                if len(row) > date_col_idx:
+                    row_date = str(row[date_col_idx]).strip()
+                    if row_date == target_date:
+                        if len(row) > status_col_idx:
+                            status = str(row[status_col_idx]).strip().upper()
+                            if status == "FINAL":
+                                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.exception(f"Error checking for finalized data: {e}")
+            return False
+
     def write_today_hourly_payouts(self, publishers: List[Dict[str, Any]], today_date: str) -> None:
         """
         Write today's hourly publisher payout data, replacing any existing LIVE data for today.
+        
+        IMPORTANT: If today's data has already been finalized (Status = FINAL), 
+        this method will NOT write new LIVE data to prevent duplicates.
         
         Args:
             publishers: List of dicts with "Publisher", "Campaign", "Payout", and "Date" keys
@@ -199,6 +248,12 @@ class GoogleSheetsClient:
 
         # Ensure Status column exists
         self._ensure_status_column()
+        
+        # CRITICAL: Check if today's data has already been finalized
+        # If it has, don't write new LIVE data to prevent duplicates
+        if self._has_finalized_data_for_date(today_date):
+            logger.warning(f"Today's data ({today_date}) has already been finalized. Skipping hourly refresh to prevent duplicates.")
+            return
         
         # Delete existing LIVE rows for today
         deleted_count = self._delete_today_live_rows(today_date)

@@ -37,13 +37,21 @@ scheduler = AsyncIOScheduler()
 
 
 async def run_hourly_refresh():
-    """Scheduled task to run hourly refresh for today's data."""
+    """
+    Scheduled task to run hourly refresh for today's data.
+    Will skip if today's data has already been finalized (after 9 PM).
+    """
     logger.info("Running hourly refresh for today's data")
     try:
         # Get current date/time in EST timezone
         est = timezone('America/New_York')
         now_est = datetime.now(est)
         today_date = now_est.strftime('%Y-%m-%d')
+        
+        # Check if today's data has already been finalized
+        if sheets_client._has_finalized_data_for_date(today_date):
+            logger.info(f"Today's data ({today_date}) has already been finalized. Skipping hourly refresh.")
+            return
         
         # Get today's data from start of day to now
         today_start = now_est.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -62,6 +70,7 @@ async def run_hourly_refresh():
         
         if publishers:
             # Write with Status = "LIVE", replacing any existing LIVE data for today
+            # This method will also check for finalized data internally as a safety measure
             sheets_client.write_today_hourly_payouts(publishers, today_date)
             logger.info(f"Hourly refresh completed: {len(publishers)} publishers synced for {today_date}")
         else:
@@ -317,7 +326,20 @@ async def sync_today_hourly():
                 }
             )
         
+        # Check if today's data has already been finalized
+        if sheets_client._has_finalized_data_for_date(today_date):
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "skipped",
+                    "message": f"Today's data ({today_date}) has already been finalized. No new LIVE data written to prevent duplicates.",
+                    "publishers_count": 0,
+                    "date": today_date
+                }
+            )
+        
         # Write with Status = "LIVE", replacing any existing LIVE data for today
+        # This method will also check for finalized data internally as a safety measure
         sheets_client.write_today_hourly_payouts(publishers, today_date)
         
         return JSONResponse(
