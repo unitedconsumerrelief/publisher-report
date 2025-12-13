@@ -360,6 +360,59 @@ async def sync_today_hourly():
         ) from e
 
 
+@app.get("/cleanup-duplicates")
+@app.post("/cleanup-duplicates")
+async def cleanup_duplicates(
+    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)")
+):
+    """
+    Clean up duplicate LIVE rows for a date that already has FINAL rows.
+    This removes LIVE rows when FINAL rows already exist to prevent duplicates.
+    
+    Query Parameters:
+        date: Optional date in YYYY-MM-DD format (defaults to today)
+    """
+    try:
+        if date:
+            target_date = date
+        else:
+            # Default to today
+            est = timezone('America/New_York')
+            now_est = datetime.now(est)
+            target_date = now_est.strftime('%Y-%m-%d')
+        
+        # Validate date format
+        try:
+            datetime.strptime(target_date, '%Y-%m-%d')
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Use YYYY-MM-DD format. Got: {target_date}"
+            )
+        
+        # Clean up duplicate LIVE rows
+        deleted_count = sheets_client.cleanup_duplicate_live_rows(target_date)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Cleaned up {deleted_count} duplicate LIVE rows for {target_date}",
+                "date": target_date,
+                "rows_deleted": deleted_count
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to cleanup duplicates")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup duplicates: {str(e)}"
+        ) from e
+
+
 @app.get("/finalize-date")
 @app.post("/finalize-date")
 async def finalize_date(

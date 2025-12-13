@@ -393,6 +393,69 @@ class GoogleSheetsClient:
             logger.exception(f"Error finalizing LIVE data: {e}")
             return 0
 
+    def cleanup_duplicate_live_rows(self, target_date: str) -> int:
+        """
+        Remove LIVE rows for a date that already has FINAL rows.
+        This cleans up duplicates where both LIVE and FINAL exist for the same date.
+        
+        Args:
+            target_date: Date string in YYYY-MM-DD format
+            
+        Returns:
+            Number of LIVE rows deleted
+        """
+        try:
+            # First check if there are FINAL rows for this date
+            if not self._has_finalized_data_for_date(target_date):
+                logger.info(f"No FINAL rows found for {target_date}, nothing to clean up")
+                return 0
+            
+            # If FINAL rows exist, delete all LIVE rows for this date
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:
+                return 0
+            
+            header = all_values[0]
+            
+            # Find column indices
+            date_col_idx = None
+            status_col_idx = None
+            
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                elif col_name.lower() == "status":
+                    status_col_idx = idx
+            
+            if date_col_idx is None or status_col_idx is None:
+                logger.warning("Date or Status column not found")
+                return 0
+            
+            # Find LIVE rows for this date
+            rows_to_delete = []
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) > date_col_idx:
+                    row_date = str(row[date_col_idx]).strip()
+                    if row_date == target_date:
+                        if len(row) > status_col_idx:
+                            status = str(row[status_col_idx]).strip().upper()
+                            if status == "LIVE":
+                                rows_to_delete.append(row_idx)
+            
+            # Delete LIVE rows in reverse order
+            if rows_to_delete:
+                rows_to_delete.sort(reverse=True)
+                for row_num in rows_to_delete:
+                    self.sheet.delete_rows(row_num)
+                logger.info(f"Cleaned up {len(rows_to_delete)} duplicate LIVE rows for {target_date}")
+                return len(rows_to_delete)
+            
+            return 0
+            
+        except Exception as e:
+            logger.exception(f"Error cleaning up duplicate LIVE rows: {e}")
+            return 0
+
     def finalize_today_data(self, today_date: str) -> int:
         """
         Change Status from "LIVE" to "FINAL" for all rows with today's date.
