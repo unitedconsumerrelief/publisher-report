@@ -125,14 +125,14 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduled hourly refresh - runs every hour at :00 minutes EST")
         
         # Schedule end-of-day report
-        # Run at 9:00 PM EST on weekdays (Monday-Friday) to finalize today's data
+        # Run at 9:00 PM EST every day to finalize today's data
         scheduler.add_job(
             run_end_of_day_report,
-            trigger=CronTrigger(hour=21, minute=0, day_of_week='mon-fri', timezone="America/New_York"),
+            trigger=CronTrigger(hour=21, minute=0, timezone="America/New_York"),
             id="end_of_day_report",
             replace_existing=True
         )
-        logger.info("Scheduled end-of-day report - runs at 9:00 PM EST on weekdays (Monday-Friday)")
+        logger.info("Scheduled end-of-day report - runs at 9:00 PM EST every day")
         
         scheduler.start()
     else:
