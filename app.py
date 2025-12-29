@@ -183,6 +183,14 @@ async def debug_ringba(
                 {
                     "column": "payoutAmount",
                     "aggregateFunction": None
+                },
+                {
+                    "column": "completedCalls",
+                    "aggregateFunction": "count"
+                },
+                {
+                    "column": "payoutCount",
+                    "aggregateFunction": "count"
                 }
             ],
             "orderByColumns": [
