@@ -84,6 +84,12 @@ async def run_daily_report():
     """
     Scheduled task to pull and write today's complete data.
     Runs daily at 8:00 PM EST to pull the full day's data and write it with Status = "FINAL".
+    
+    IMPORTANT: This function will DELETE all existing rows for today (both LIVE and FINAL)
+    before writing fresh data. This ensures:
+    - Today's test data gets overwritten with final data
+    - Each day gets clean, accurate data at 8pm
+    - No duplicate rows for the same day
     """
     logger.info("Running scheduled daily report")
     try:
@@ -108,11 +114,12 @@ async def run_daily_report():
         )
         
         if publishers:
-            # Delete any existing rows for today (both LIVE and FINAL) before writing fresh data
-            # This ensures we have clean, accurate data for the day
+            # CRITICAL: Delete ALL existing rows for today (both LIVE and FINAL) before writing fresh data
+            # This overwrites any test data from earlier in the day with the final 8pm data
+            # For future days, this ensures clean data each day at 8pm
             deleted_count = sheets_client.delete_all_rows_for_date(today_date)
             if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} existing rows for {today_date} before writing fresh data")
+                logger.info(f"Deleted {deleted_count} existing rows for {today_date} (including test data) before writing fresh FINAL data")
             
             # Write today's data with Status = "FINAL"
             sheets_client.write_publisher_payouts(publishers, clear_existing=False)
