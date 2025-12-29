@@ -80,11 +80,58 @@ async def run_hourly_refresh():
         logger.exception(f"Failed to run hourly refresh: {e}")
 
 
+async def run_daily_report():
+    """
+    Scheduled task to pull and write today's complete data.
+    Runs daily at 8:00 PM EST to pull the full day's data and write it with Status = "FINAL".
+    """
+    logger.info("Running scheduled daily report")
+    try:
+        # Get current date in EST timezone
+        est = timezone('America/New_York')
+        now_est = datetime.now(est)
+        today_date = now_est.strftime('%Y-%m-%d')
+        
+        # Get today's full day data (from start of day to now)
+        today_start = now_est.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = now_est
+        
+        # Convert to UTC for API calls
+        today_start_utc = today_start.astimezone(UTC)
+        today_end_utc = today_end.astimezone(UTC)
+        
+        logger.info(f"Pulling full day's data for {today_date}: {today_start_utc.isoformat()} to {today_end_utc.isoformat()}")
+        
+        publishers = ringba_client.get_publisher_payouts(
+            report_start=today_start_utc.isoformat().replace('+00:00', 'Z'),
+            report_end=today_end_utc.isoformat().replace('+00:00', 'Z')
+        )
+        
+        if publishers:
+            # Delete any existing rows for today (both LIVE and FINAL) before writing fresh data
+            # This ensures we have clean, accurate data for the day
+            deleted_count = sheets_client.delete_all_rows_for_date(today_date)
+            if deleted_count > 0:
+                logger.info(f"Deleted {deleted_count} existing rows for {today_date} before writing fresh data")
+            
+            # Write today's data with Status = "FINAL"
+            sheets_client.write_publisher_payouts(publishers, clear_existing=False)
+            logger.info(f"Daily report completed: {len(publishers)} publishers synced for {today_date} with Status = FINAL")
+        else:
+            logger.warning(f"Daily report: No publisher data found for {today_date}")
+            
+    except Exception as e:
+        logger.exception(f"Failed to run daily report: {e}")
+
+
 async def run_end_of_day_report():
     """
     Scheduled task to finalize today's LIVE data.
     Changes Status from "LIVE" to "FINAL" for all today's rows.
     Historical data is already in the system from when it was "today", so we don't pull it again.
+    
+    NOTE: This function is kept for backward compatibility with hourly setup.
+    For daily-only setup, use run_daily_report() instead.
     """
     logger.info("Running scheduled end-of-day report")
     try:
@@ -114,25 +161,36 @@ async def lifespan(app: FastAPI):
     enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
     
     if enable_scheduler:
-        # Startup: Schedule hourly refresh for today's data
-        # Run every hour at minute 0 (e.g., 1:00, 2:00, 3:00, etc.)
+        # Schedule daily report
+        # Run at 8:00 PM EST every day (Monday-Sunday) to pull and write today's complete data
         scheduler.add_job(
-            run_hourly_refresh,
-            trigger=CronTrigger(minute=0, timezone="America/New_York"),
-            id="hourly_refresh",
+            run_daily_report,
+            trigger=CronTrigger(hour=20, minute=0, timezone="America/New_York"),
+            id="daily_report",
             replace_existing=True
         )
-        logger.info("Scheduled hourly refresh - runs every hour at :00 minutes EST")
+        logger.info("Scheduled daily report - runs at 8:00 PM EST every day (Monday-Sunday)")
         
-        # Schedule end-of-day report
-        # Run at 9:00 PM EST every day to finalize today's data
-        scheduler.add_job(
-            run_end_of_day_report,
-            trigger=CronTrigger(hour=21, minute=0, timezone="America/New_York"),
-            id="end_of_day_report",
-            replace_existing=True
-        )
-        logger.info("Scheduled end-of-day report - runs at 9:00 PM EST every day")
+        # NOTE: Hourly refresh is disabled. To re-enable hourly reporting:
+        # 1. Comment out the daily_report job above
+        # 2. Uncomment the hourly_refresh and end_of_day_report jobs below
+        # 3. Restore from backup-before-daily-setup branch if needed
+        
+        # scheduler.add_job(
+        #     run_hourly_refresh,
+        #     trigger=CronTrigger(minute=0, timezone="America/New_York"),
+        #     id="hourly_refresh",
+        #     replace_existing=True
+        # )
+        # logger.info("Scheduled hourly refresh - runs every hour at :00 minutes EST")
+        
+        # scheduler.add_job(
+        #     run_end_of_day_report,
+        #     trigger=CronTrigger(hour=21, minute=0, timezone="America/New_York"),
+        #     id="end_of_day_report",
+        #     replace_existing=True
+        # )
+        # logger.info("Scheduled end-of-day report - runs at 9:00 PM EST every day")
         
         scheduler.start()
     else:

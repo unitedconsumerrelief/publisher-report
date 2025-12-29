@@ -372,6 +372,56 @@ class GoogleSheetsClient:
             logger.exception(f"Error finalizing LIVE data: {e}")
             return 0
 
+    def delete_all_rows_for_date(self, target_date: str) -> int:
+        """
+        Delete all rows (both LIVE and FINAL) for a specific date.
+        
+        Args:
+            target_date: Date string in YYYY-MM-DD format
+            
+        Returns:
+            Number of rows deleted
+        """
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) <= 1:
+                return 0
+            
+            header = all_values[0]
+            
+            # Find date column index
+            date_col_idx = None
+            for idx, col_name in enumerate(header):
+                if col_name.lower() == "date":
+                    date_col_idx = idx
+                    break
+            
+            if date_col_idx is None:
+                logger.warning("Date column not found")
+                return 0
+            
+            # Find all rows for this date
+            rows_to_delete = []
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) > date_col_idx:
+                    row_date = str(row[date_col_idx]).strip()
+                    if row_date == target_date:
+                        rows_to_delete.append(row_idx)
+            
+            # Delete rows in reverse order
+            if rows_to_delete:
+                rows_to_delete.sort(reverse=True)
+                for row_num in rows_to_delete:
+                    self.sheet.delete_rows(row_num)
+                logger.info(f"Deleted {len(rows_to_delete)} rows for {target_date}")
+                return len(rows_to_delete)
+            
+            return 0
+            
+        except Exception as e:
+            logger.exception(f"Error deleting rows for date: {e}")
+            return 0
+
     def cleanup_duplicate_live_rows(self, target_date: str) -> int:
         """
         Remove LIVE rows for a date that already has FINAL rows.
@@ -446,68 +496,6 @@ class GoogleSheetsClient:
             Number of rows finalized
         """
         return self.finalize_live_data_for_dates([today_date])
-        try:
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:
-                return 0
-            
-            header = all_values[0]
-            
-            # Find column indices
-            date_col_idx = None
-            status_col_idx = None
-            
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                elif col_name.lower() == "status":
-                    status_col_idx = idx
-            
-            if date_col_idx is None:
-                logger.warning("Date column not found")
-                return 0
-            
-            if status_col_idx is None:
-                logger.warning("Status column not found - cannot finalize")
-                return 0
-            
-            # Find rows to update
-            rows_to_update = []
-            for row_idx, row in enumerate(all_values[1:], start=2):
-                if len(row) <= date_col_idx:
-                    continue
-                
-                row_date = str(row[date_col_idx]).strip()
-                if row_date == today_date:
-                    if len(row) > status_col_idx:
-                        current_status = str(row[status_col_idx]).strip().upper()
-                        if current_status == "LIVE":
-                            rows_to_update.append((row_idx, row))
-            
-            # Update rows
-            if rows_to_update:
-                updates = []
-                for row_idx, row in rows_to_update:
-                    # Ensure row has enough columns
-                    while len(row) <= status_col_idx:
-                        row.append("")
-                    row[status_col_idx] = "FINAL"
-                    updates.append((row_idx, row))
-                
-                # Batch update
-                for row_idx, row in updates:
-                    # Update just the Status column
-                    cell_address = f"{chr(65 + status_col_idx)}{row_idx}"  # Convert to A1 notation
-                    self.sheet.update(cell_address, [["FINAL"]])
-                
-                logger.info(f"Finalized {len(updates)} rows for date {today_date}")
-                return len(updates)
-            
-            return 0
-            
-        except Exception as e:
-            logger.exception(f"Error finalizing today's data: {e}")
-            return 0
 
     def write_publisher_payouts(self, publishers: List[Dict[str, Any]], clear_existing: bool = True) -> None:
         """
