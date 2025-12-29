@@ -183,14 +183,6 @@ async def debug_ringba(
                 {
                     "column": "payoutAmount",
                     "aggregateFunction": None
-                },
-                {
-                    "column": "hasConnected",
-                    "aggregateFunction": None
-                },
-                {
-                    "column": "hasPayout",
-                    "aggregateFunction": None
                 }
             ],
             "orderByColumns": [
