@@ -86,6 +86,14 @@ class RingbaClient:
                 {
                     "column": "payoutAmount",
                     "aggregateFunction": None
+                },
+                {
+                    "column": "completedCalls",
+                    "aggregateFunction": "count"
+                },
+                {
+                    "column": "payoutCount",
+                    "aggregateFunction": "count"
                 }
             ],
             "orderByColumns": [
@@ -146,6 +154,20 @@ class RingbaClient:
                                     except (ValueError, TypeError):
                                         payout_amount = 0.0
                                     
+                                    # Extract completedCalls (Completed Calls count)
+                                    completed_calls_str = record.get("completedCalls", "0")
+                                    try:
+                                        completed_calls = int(float(completed_calls_str))
+                                    except (ValueError, TypeError):
+                                        completed_calls = 0
+                                    
+                                    # Extract payoutCount (Paid Calls count)
+                                    paid_calls_str = record.get("payoutCount", "0")
+                                    try:
+                                        paid_calls = int(float(paid_calls_str))
+                                    except (ValueError, TypeError):
+                                        paid_calls = 0
+                                    
                                     # Create a unique key for deduplication
                                     key = (report_date, publisher_name, campaign_name)
                                     
@@ -153,14 +175,18 @@ class RingbaClient:
                                     if not campaign_name:
                                         publishers_with_empty_campaign.add((report_date, publisher_name))
                                     
-                                    # If this combination already exists, sum the payouts
+                                    # If this combination already exists, sum the values
                                     if key in publishers_dict:
                                         publishers_dict[key]["Payout"] += payout_amount
+                                        publishers_dict[key]["Completed Calls"] += completed_calls
+                                        publishers_dict[key]["Paid Calls"] += paid_calls
                                     else:
                                         publishers_dict[key] = {
                                             "Publisher": publisher_name,
                                             "Campaign": campaign_name,
                                             "Payout": payout_amount,
+                                            "Completed Calls": completed_calls,
+                                            "Paid Calls": paid_calls,
                                             "Date": report_date
                                         }
                             

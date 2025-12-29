@@ -263,13 +263,14 @@ class GoogleSheetsClient:
         header = self._get_header_row()
         
         # Ensure header has the required columns
-        required_cols = ["Date", "Publisher", "Campaign", "Payout", "Status"]
+        required_cols = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
         header_dict = {col.lower(): idx for idx, col in enumerate(header)}
         
         # Build rows with Status = "LIVE"
         rows = []
         for pub in publishers:
-            row = [""] * max(len(header), 6)  # Ensure at least 6 columns
+            # Ensure row has enough columns (at least 7: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status)
+            row = [""] * max(len(header), 7)
             
             # Set Date
             if "date" in header_dict:
@@ -295,11 +296,23 @@ class GoogleSheetsClient:
             elif len(header) > 3:
                 row[3] = str(pub.get("Payout", ""))
             
-            # Set Status = "LIVE" (Column F, index 5)
+            # Set Completed Calls
+            if "completed calls" in header_dict:
+                row[header_dict["completed calls"]] = str(pub.get("Completed Calls", "0"))
+            elif len(header) > 4:
+                row[4] = str(pub.get("Completed Calls", "0"))
+            
+            # Set Paid Calls
+            if "paid calls" in header_dict:
+                row[header_dict["paid calls"]] = str(pub.get("Paid Calls", "0"))
+            elif len(header) > 5:
+                row[5] = str(pub.get("Paid Calls", "0"))
+            
+            # Set Status = "LIVE" (Column G, index 6)
             if "status" in header_dict:
                 row[header_dict["status"]] = "LIVE"
             else:
-                row[5] = "LIVE"
+                row[6] = "LIVE"
             
             rows.append(row)
 
@@ -545,8 +558,8 @@ class GoogleSheetsClient:
         # Ensure Status column exists
         self._ensure_status_column()
 
-        # Define header order: Date, Publisher, Campaign, Payout, Status
-        header = ["Date", "Publisher", "Campaign", "Payout", "", "Status"]
+        # Define header order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status
+        header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
         
         # Set header row
         self._set_header_row(header)
@@ -572,7 +585,8 @@ class GoogleSheetsClient:
                 str(pub.get("Publisher", "")),
                 str(pub.get("Campaign", "")),
                 str(pub.get("Payout", "")),
-                "",  # Empty column (normalized date column)
+                str(pub.get("Completed Calls", "0")),
+                str(pub.get("Paid Calls", "0")),
                 "FINAL"  # Status column
             ]
             rows.append(row)
