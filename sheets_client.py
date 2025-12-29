@@ -259,61 +259,27 @@ class GoogleSheetsClient:
         deleted_count = self._delete_today_live_rows(today_date)
         logger.info(f"Deleted {deleted_count} existing LIVE rows for {today_date}")
 
-        # Get current header to maintain column order
-        header = self._get_header_row()
+        # Set the correct header first to ensure all columns exist
+        # Column order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status
+        header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
+        self._set_header_row(header)
         
-        # Ensure header has the required columns
-        required_cols = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
+        # Get header dict for column mapping
         header_dict = {col.lower(): idx for idx, col in enumerate(header)}
         
         # Build rows with Status = "LIVE"
+        # Column order: Date (0), Publisher (1), Campaign (2), Payout (3), Completed Calls (4), Paid Calls (5), Status (6)
         rows = []
         for pub in publishers:
-            # Ensure row has enough columns (at least 7: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status)
-            row = [""] * max(len(header), 7)
-            
-            # Set Date
-            if "date" in header_dict:
-                row[header_dict["date"]] = str(pub.get("Date", today_date))
-            elif len(header) > 0:
-                row[0] = str(pub.get("Date", today_date))
-            
-            # Set Publisher
-            if "publisher" in header_dict:
-                row[header_dict["publisher"]] = str(pub.get("Publisher", ""))
-            elif len(header) > 1:
-                row[1] = str(pub.get("Publisher", ""))
-            
-            # Set Campaign
-            if "campaign" in header_dict:
-                row[header_dict["campaign"]] = str(pub.get("Campaign", ""))
-            elif len(header) > 2:
-                row[2] = str(pub.get("Campaign", ""))
-            
-            # Set Payout
-            if "payout" in header_dict:
-                row[header_dict["payout"]] = str(pub.get("Payout", ""))
-            elif len(header) > 3:
-                row[3] = str(pub.get("Payout", ""))
-            
-            # Set Completed Calls
-            if "completed calls" in header_dict:
-                row[header_dict["completed calls"]] = str(pub.get("Completed Calls", "0"))
-            elif len(header) > 4:
-                row[4] = str(pub.get("Completed Calls", "0"))
-            
-            # Set Paid Calls
-            if "paid calls" in header_dict:
-                row[header_dict["paid calls"]] = str(pub.get("Paid Calls", "0"))
-            elif len(header) > 5:
-                row[5] = str(pub.get("Paid Calls", "0"))
-            
-            # Set Status = "LIVE" (Column G, index 6)
-            if "status" in header_dict:
-                row[header_dict["status"]] = "LIVE"
-            else:
-                row[6] = "LIVE"
-            
+            row = [
+                str(pub.get("Date", today_date)),           # Column A: Date
+                str(pub.get("Publisher", "")),              # Column B: Publisher
+                str(pub.get("Campaign", "")),               # Column C: Campaign
+                str(pub.get("Payout", "")),                 # Column D: Payout
+                str(pub.get("Completed Calls", "0")),       # Column E: Completed Calls
+                str(pub.get("Paid Calls", "0")),            # Column F: Paid Calls
+                "LIVE"                                      # Column G: Status
+            ]
             rows.append(row)
 
         # Append new rows
