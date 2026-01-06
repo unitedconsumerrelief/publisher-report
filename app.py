@@ -1,7 +1,7 @@
 # app.py
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from pytz import timezone, UTC
