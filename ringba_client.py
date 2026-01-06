@@ -89,11 +89,11 @@ class RingbaClient:
                 },
                 {
                     "column": "completedCalls",
-                    "aggregateFunction": None
+                    "aggregateFunction": "count"
                 },
                 {
                     "column": "paidCalls",
-                    "aggregateFunction": None
+                    "aggregateFunction": "count"
                 }
             ],
             "orderByColumns": [
