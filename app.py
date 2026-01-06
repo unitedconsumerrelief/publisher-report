@@ -540,12 +540,18 @@ async def cleanup_hourly_duplicates():
             )
         
         hour_col_index = 7  # Hour column index
+        status_col_index = 6  # Status column index
         rows_by_hour = {}  # Track rows by hour identifier
         
-        # Group rows by hour identifier
+        # Group rows by hour identifier (excluding FINAL status rows)
         for i in range(1, len(all_values)):  # Skip header
             row = all_values[i]
             if len(row) > hour_col_index:
+                # Check status - NEVER touch rows with "FINAL" status
+                row_status = str(row[status_col_index]).strip() if len(row) > status_col_index else ""
+                if row_status.upper() == "FINAL":
+                    continue  # Skip FINAL rows - they are permanent
+                
                 hour_identifier = str(row[hour_col_index]).strip()
                 if hour_identifier:
                     if hour_identifier not in rows_by_hour:

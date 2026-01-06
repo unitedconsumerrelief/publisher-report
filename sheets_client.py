@@ -202,13 +202,21 @@ class GoogleSheetsClient:
                 hour_col_index = 7  # 0-based index for column H (8th column)
                 
                 # Find ALL rows that match this hour identifier (including partial matches)
+                # IMPORTANT: Do NOT delete rows with "FINAL" status - they are permanent
+                status_col_index = 6  # Status column index (0-based, column G)
                 rows_to_delete = []
                 for i in range(1, len(all_values)):  # Skip header row
                     row = all_values[i]
                     # Check if row has hour column and matches the hour identifier
                     if len(row) > hour_col_index:
                         row_hour = str(row[hour_col_index]).strip()
+                        # Check if this row matches the hour identifier
                         if row_hour == hour_identifier or row_hour.startswith(hour_identifier.split()[0] + " " + hour_identifier.split()[1]):
+                            # Check status - NEVER delete rows with "FINAL" status
+                            row_status = str(row[status_col_index]).strip() if len(row) > status_col_index else ""
+                            if row_status.upper() == "FINAL":
+                                logger.info(f"Skipping deletion of row {i + 1} with FINAL status for hour {hour_identifier}")
+                                continue  # Skip this row - it's finalized and should not be deleted
                             rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
                 
                 # Delete matching rows (delete from bottom to top to preserve indices)
