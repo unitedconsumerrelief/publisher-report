@@ -21,13 +21,21 @@ logger = logging.getLogger(__name__)
 # Environment variables (set these in Render)
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")          # e.g. 1abc123...
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Sheet1")
+HOURLY_WORKSHEET_NAME = os.getenv("HOURLY_WORKSHEET_NAME", "Hourly")
 
 if not SPREADSHEET_ID:
     raise RuntimeError("SPREADSHEET_ID env var is required")
 
+# Daily reporting client (for Sheet1)
 sheets_client = GoogleSheetsClient(
     spreadsheet_id=SPREADSHEET_ID,
     worksheet_name=WORKSHEET_NAME,
+)
+
+# Hourly reporting client (for Hourly tab)
+hourly_sheets_client = GoogleSheetsClient(
+    spreadsheet_id=SPREADSHEET_ID,
+    worksheet_name=HOURLY_WORKSHEET_NAME,
 )
 
 ringba_client = RingbaClient()
@@ -36,128 +44,137 @@ ringba_client = RingbaClient()
 scheduler = AsyncIOScheduler()
 
 
-async def run_hourly_refresh():
-    """
-    Scheduled task to run hourly refresh for today's data.
-    Will skip if today's data has already been finalized (after 9 PM).
-    """
-    logger.info("Running hourly refresh for today's data")
-    try:
-        # Get current date/time in EST timezone
-        est = timezone('America/New_York')
-        now_est = datetime.now(est)
-        today_date = now_est.strftime('%Y-%m-%d')
-        
-        # Check if today's data has already been finalized
-        if sheets_client._has_finalized_data_for_date(today_date):
-            logger.info(f"Today's data ({today_date}) has already been finalized. Skipping hourly refresh.")
-            return
-        
-        # Get today's data from start of day to now
-        today_start = now_est.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now_est
-        
-        # Convert to UTC for API calls
-        today_start_utc = today_start.astimezone(UTC)
-        today_end_utc = today_end.astimezone(UTC)
-        
-        logger.info(f"Pulling today's data ({today_date}): {today_start_utc.isoformat()} to {today_end_utc.isoformat()}")
-        
-        publishers = ringba_client.get_publisher_payouts(
-            report_start=today_start_utc.isoformat().replace('+00:00', 'Z'),
-            report_end=today_end_utc.isoformat().replace('+00:00', 'Z')
-        )
-        
-        if publishers:
-            # Write with Status = "LIVE", replacing any existing LIVE data for today
-            # This method will also check for finalized data internally as a safety measure
-            sheets_client.write_today_hourly_payouts(publishers, today_date)
-            logger.info(f"Hourly refresh completed: {len(publishers)} publishers synced for {today_date}")
-        else:
-            logger.warning(f"Hourly refresh: No publisher data found for {today_date}")
-            
-    except Exception as e:
-        logger.exception(f"Failed to run hourly refresh: {e}")
-
-
-async def run_daily_report():
-    """
-    Scheduled task to pull and write today's complete data.
-    Runs daily at 8:00 PM EST to pull the full day's data and write it with Status = "FINAL".
-    
-    IMPORTANT: This function will DELETE all existing rows for today (both LIVE and FINAL)
-    before writing fresh data. This ensures:
-    - Today's test data gets overwritten with final data
-    - Each day gets clean, accurate data at 8pm
-    - No duplicate rows for the same day
-    """
-    logger.info("Running scheduled daily report")
-    try:
-        # Get current date in EST timezone
-        est = timezone('America/New_York')
-        now_est = datetime.now(est)
-        today_date = now_est.strftime('%Y-%m-%d')
-        
-        # Get today's full day data (from start of day to now)
-        today_start = now_est.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now_est
-        
-        # Convert to UTC for API calls
-        today_start_utc = today_start.astimezone(UTC)
-        today_end_utc = today_end.astimezone(UTC)
-        
-        logger.info(f"Pulling full day's data for {today_date}: {today_start_utc.isoformat()} to {today_end_utc.isoformat()}")
-        
-        publishers = ringba_client.get_publisher_payouts(
-            report_start=today_start_utc.isoformat().replace('+00:00', 'Z'),
-            report_end=today_end_utc.isoformat().replace('+00:00', 'Z')
-        )
-        
-        if publishers:
-            # CRITICAL: Delete ALL existing rows for today (both LIVE and FINAL) before writing fresh data
-            # This overwrites any test data from earlier in the day with the final 8pm data
-            # For future days, this ensures clean data each day at 8pm
-            deleted_count = sheets_client.delete_all_rows_for_date(today_date)
-            if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} existing rows for {today_date} (including test data) before writing fresh FINAL data")
-            
-            # Write today's data with Status = "FINAL"
-            sheets_client.write_publisher_payouts(publishers, clear_existing=False)
-            logger.info(f"Daily report completed: {len(publishers)} publishers synced for {today_date} with Status = FINAL")
-        else:
-            logger.warning(f"Daily report: No publisher data found for {today_date}")
-            
-    except Exception as e:
-        logger.exception(f"Failed to run daily report: {e}")
-
-
 async def run_end_of_day_report():
-    """
-    Scheduled task to finalize today's LIVE data.
-    Changes Status from "LIVE" to "FINAL" for all today's rows.
-    Historical data is already in the system from when it was "today", so we don't pull it again.
-    
-    NOTE: This function is kept for backward compatibility with hourly setup.
-    For daily-only setup, use run_daily_report() instead.
-    """
+    """Scheduled task to run end-of-day report."""
     logger.info("Running scheduled end-of-day report")
     try:
         # Get current date in EST timezone
         est = timezone('America/New_York')
         now_est = datetime.now(est)
-        today_date = now_est.strftime('%Y-%m-%d')
+        current_weekday = now_est.weekday()  # 0=Monday, 6=Sunday
         
-        # Finalize today's LIVE data (change Status from LIVE to FINAL)
-        # This is the final update for today - the data is already accurate from hourly pulls
-        finalized_count = sheets_client.finalize_today_data(today_date)
+        all_publishers = []
         
-        if finalized_count > 0:
-            logger.info(f"End-of-day report completed: Finalized {finalized_count} LIVE rows for {today_date} (Status changed to FINAL)")
+        if current_weekday == 0:  # Monday - pull Friday, Saturday, Sunday
+            logger.info("Monday detected - pulling weekend data (Friday, Saturday, Sunday)")
+            # Friday (3 days ago)
+            friday = now_est - timedelta(days=3)
+            friday_start = friday.replace(hour=0, minute=0, second=0, microsecond=0)
+            friday_end = friday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Saturday (2 days ago)
+            saturday = now_est - timedelta(days=2)
+            saturday_start = saturday.replace(hour=0, minute=0, second=0, microsecond=0)
+            saturday_end = saturday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Sunday (yesterday)
+            sunday = now_est - timedelta(days=1)
+            sunday_start = sunday.replace(hour=0, minute=0, second=0, microsecond=0)
+            sunday_end = sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Convert to UTC for API calls
+            for day_name, day_start, day_end in [
+                ("Friday", friday_start, friday_end),
+                ("Saturday", saturday_start, saturday_end),
+                ("Sunday", sunday_start, sunday_end)
+            ]:
+                day_start_utc = day_start.astimezone(UTC)
+                day_end_utc = day_end.astimezone(UTC)
+                
+                logger.info(f"Pulling {day_name} data: {day_start_utc.date()}")
+                publishers = ringba_client.get_publisher_payouts(
+                    report_start=day_start_utc.isoformat().replace('+00:00', 'Z'),
+                    report_end=day_end_utc.isoformat().replace('+00:00', 'Z')
+                )
+                all_publishers.extend(publishers)
         else:
-            logger.warning(f"End-of-day report: No LIVE rows found to finalize for {today_date}")
+            # Tuesday-Friday - pull previous day
+            logger.info(f"Weekday detected ({now_est.strftime('%A')}) - pulling previous day data")
+            yesterday = now_est - timedelta(days=1)
+            report_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+            report_end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Convert to UTC for API calls
+            report_start_utc = report_start.astimezone(UTC)
+            report_end_utc = report_end.astimezone(UTC)
+            
+            all_publishers = ringba_client.get_publisher_payouts(
+                report_start=report_start_utc.isoformat().replace('+00:00', 'Z'),
+                report_end=report_end_utc.isoformat().replace('+00:00', 'Z')
+            )
+        
+        if all_publishers:
+            sheets_client.write_publisher_payouts(all_publishers, clear_existing=False)
+            logger.info(f"End-of-day report completed: {len(all_publishers)} publishers synced")
+        else:
+            logger.warning("End-of-day report: No publisher data found")
             
     except Exception as e:
         logger.exception(f"Failed to run end-of-day report: {e}")
+
+
+async def run_hourly_report():
+    """Scheduled task to run hourly report. Only runs between 9am and 9pm EST."""
+    logger.info("Running scheduled hourly report")
+    try:
+        # Get current time in EST timezone
+        est = timezone('America/New_York')
+        now_est = datetime.now(est)
+        current_hour = now_est.hour
+        
+        # Safety check: Only run between 9am (9) and 9pm (21) EST
+        # After 9pm, data is finalized and should not be overwritten
+        if current_hour < 9 or current_hour > 21:
+            logger.info(f"Hourly report skipped: Current hour {current_hour} is outside operating window (9am-9pm EST)")
+            return
+        
+        # Calculate previous hour's time range
+        previous_hour = now_est - timedelta(hours=1)
+        previous_hour_num = previous_hour.hour
+        
+        # Additional safety check: Only process hours between 9am (inclusive) and 9pm (exclusive)
+        # This ensures we don't process data from before 9am or at/after 9pm
+        # At 9:05 AM, we'd process hour 8 (8am-8:59am) - skip this
+        # At 10:05 AM, we'd process hour 9 (9am-9:59am) - process this
+        # At 9:05 PM, we'd process hour 20 (8pm-8:59pm) - process this
+        # At 10:05 PM, we'd process hour 21 (9pm-9:59pm) - skip this (data finalized)
+        if previous_hour_num < 9 or previous_hour_num >= 21:
+            logger.info(f"Hourly report skipped: Previous hour {previous_hour_num} is outside operating window (9am-9pm EST). Data is finalized after 9pm.")
+            return
+        
+        hour_start = previous_hour.replace(minute=0, second=0, microsecond=0)
+        hour_end = previous_hour.replace(minute=59, second=59, microsecond=999999)
+        
+        # Create hour identifier for tracking (format: "YYYY-MM-DD HH:00")
+        hour_identifier = hour_start.strftime("%Y-%m-%d %H:00")
+        
+        # Convert to UTC for API calls
+        hour_start_utc = hour_start.astimezone(UTC)
+        hour_end_utc = hour_end.astimezone(UTC)
+        
+        logger.info(f"Pulling hourly data for {hour_identifier}: {hour_start_utc} to {hour_end_utc}")
+        
+        # Fetch data from Ringba for the previous hour
+        publishers = ringba_client.get_publisher_payouts(
+            report_start=hour_start_utc.isoformat().replace('+00:00', 'Z'),
+            report_end=hour_end_utc.isoformat().replace('+00:00', 'Z')
+        )
+        
+        if publishers:
+            # Update Date field to include hour information for hourly tab
+            # Extract date from hour_start
+            date_str = hour_start.strftime("%Y-%m-%d")
+            for pub in publishers:
+                pub["Date"] = date_str
+            
+            # Write to hourly sheet (clears previous hour's data and writes fresh)
+            hourly_sheets_client.write_hourly_publisher_payouts(publishers, hour_identifier)
+            logger.info(f"Hourly report completed: {len(publishers)} publishers synced for hour {hour_identifier}")
+        else:
+            logger.warning(f"Hourly report: No publisher data found for hour {hour_identifier}")
+            
+    except Exception as e:
+        logger.exception(f"Failed to run hourly report: {e}")
 
 
 @asynccontextmanager
@@ -168,38 +185,28 @@ async def lifespan(app: FastAPI):
     enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
     
     if enable_scheduler:
-        # Schedule daily report
-        # Run at 8:00 PM EST every day (Monday-Sunday) to pull and write today's complete data
+        # Startup: Schedule end-of-day report
+        # Run at 9:00 AM EST on weekdays (Monday-Friday)
         scheduler.add_job(
-            run_daily_report,
-            trigger=CronTrigger(hour=20, minute=0, timezone="America/New_York"),
-            id="daily_report",
+            run_end_of_day_report,
+            trigger=CronTrigger(hour=9, minute=0, day_of_week='mon-fri', timezone="America/New_York"),
+            id="end_of_day_report",
             replace_existing=True
         )
-        logger.info("Scheduled daily report - runs at 8:00 PM EST every day (Monday-Sunday)")
         
-        # NOTE: Hourly refresh is disabled. To re-enable hourly reporting:
-        # 1. Comment out the daily_report job above
-        # 2. Uncomment the hourly_refresh and end_of_day_report jobs below
-        # 3. Restore from backup-before-daily-setup branch if needed
-        
-        # scheduler.add_job(
-        #     run_hourly_refresh,
-        #     trigger=CronTrigger(minute=0, timezone="America/New_York"),
-        #     id="hourly_refresh",
-        #     replace_existing=True
-        # )
-        # logger.info("Scheduled hourly refresh - runs every hour at :00 minutes EST")
-        
-        # scheduler.add_job(
-        #     run_end_of_day_report,
-        #     trigger=CronTrigger(hour=21, minute=0, timezone="America/New_York"),
-        #     id="end_of_day_report",
-        #     replace_existing=True
-        # )
-        # logger.info("Scheduled end-of-day report - runs at 9:00 PM EST every day")
+        # Startup: Schedule hourly report
+        # Run at minute 5 of every hour between 9am and 9pm EST (e.g., 9:05, 10:05, ..., 21:05)
+        # After 9pm, data is finalized and will not be overwritten
+        scheduler.add_job(
+            run_hourly_report,
+            trigger=CronTrigger(minute=5, hour='9-21', timezone="America/New_York"),
+            id="hourly_report",
+            replace_existing=True
+        )
         
         scheduler.start()
+        logger.info("Scheduler started - End-of-day report scheduled for 9:00 AM EST on weekdays (Monday-Friday)")
+        logger.info("Scheduler started - Hourly report scheduled for minute 5 of every hour between 9am-9pm EST")
     else:
         logger.info("Scheduler disabled - Use external cron or manual triggers")
     
@@ -248,14 +255,6 @@ async def debug_ringba(
                 {
                     "column": "payoutAmount",
                     "aggregateFunction": None
-                },
-                {
-                    "column": "completedCalls",
-                    "aggregateFunction": "count"
-                },
-                {
-                    "column": "payoutCount",
-                    "aggregateFunction": "count"
                 }
             ],
             "orderByColumns": [
@@ -310,7 +309,7 @@ async def sync_publisher_payouts(
     
     This endpoint can be called:
     - Manually anytime (GET or POST) for on-demand reports
-    - Automatically via scheduled end-of-day job (runs at 9:00 PM EST on weekdays)
+    - Automatically via scheduled end-of-day job (runs at 4:05 AM UTC daily)
     
     Query Parameters:
         report_start: Optional start date (defaults to yesterday)
@@ -352,190 +351,6 @@ async def sync_publisher_payouts(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to sync publisher payouts: {str(e)}"
-        ) from e
-
-
-@app.get("/sync-today-hourly")
-@app.post("/sync-today-hourly")
-async def sync_today_hourly():
-    """
-    Manually trigger hourly refresh for today's data.
-    This replaces any existing LIVE data for today with fresh data from Ringba.
-    
-    This endpoint:
-    - Fetches data from start of today to now
-    - Deletes existing LIVE rows for today
-    - Writes new data with Status = "LIVE"
-    """
-    try:
-        # Get current date/time in EST timezone
-        est = timezone('America/New_York')
-        now_est = datetime.now(est)
-        today_date = now_est.strftime('%Y-%m-%d')
-        
-        # Get today's data from start of day to now
-        today_start = now_est.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now_est
-        
-        # Convert to UTC for API calls
-        today_start_utc = today_start.astimezone(UTC)
-        today_end_utc = today_end.astimezone(UTC)
-        
-        logger.info(f"Manual hourly refresh for {today_date}: {today_start_utc.isoformat()} to {today_end_utc.isoformat()}")
-        
-        publishers = ringba_client.get_publisher_payouts(
-            report_start=today_start_utc.isoformat().replace('+00:00', 'Z'),
-            report_end=today_end_utc.isoformat().replace('+00:00', 'Z')
-        )
-        
-        if not publishers:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": f"No publisher data found for {today_date}",
-                    "publishers_count": 0,
-                    "date": today_date
-                }
-            )
-        
-        # Check if today's data has already been finalized
-        if sheets_client._has_finalized_data_for_date(today_date):
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "skipped",
-                    "message": f"Today's data ({today_date}) has already been finalized. No new LIVE data written to prevent duplicates.",
-                    "publishers_count": 0,
-                    "date": today_date
-                }
-            )
-        
-        # Write with Status = "LIVE", replacing any existing LIVE data for today
-        # This method will also check for finalized data internally as a safety measure
-        sheets_client.write_today_hourly_payouts(publishers, today_date)
-        
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "success",
-                "message": f"Hourly refresh completed: {len(publishers)} publishers synced for {today_date}",
-                "publishers_count": len(publishers),
-                "date": today_date
-            }
-        )
-        
-    except Exception as e:
-        logger.exception("Failed to sync today's hourly data")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to sync today's hourly data: {str(e)}"
-        ) from e
-
-
-@app.get("/cleanup-duplicates")
-@app.post("/cleanup-duplicates")
-async def cleanup_duplicates(
-    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)")
-):
-    """
-    Clean up duplicate LIVE rows for a date that already has FINAL rows.
-    This removes LIVE rows when FINAL rows already exist to prevent duplicates.
-    
-    Query Parameters:
-        date: Optional date in YYYY-MM-DD format (defaults to today)
-    """
-    try:
-        if date:
-            target_date = date
-        else:
-            # Default to today
-            est = timezone('America/New_York')
-            now_est = datetime.now(est)
-            target_date = now_est.strftime('%Y-%m-%d')
-        
-        # Validate date format
-        try:
-            datetime.strptime(target_date, '%Y-%m-%d')
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid date format. Use YYYY-MM-DD format. Got: {target_date}"
-            )
-        
-        # Clean up duplicate LIVE rows
-        deleted_count = sheets_client.cleanup_duplicate_live_rows(target_date)
-        
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "success",
-                "message": f"Cleaned up {deleted_count} duplicate LIVE rows for {target_date}",
-                "date": target_date,
-                "rows_deleted": deleted_count
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Failed to cleanup duplicates")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to cleanup duplicates: {str(e)}"
-        ) from e
-
-
-@app.get("/finalize-date")
-@app.post("/finalize-date")
-async def finalize_date(
-    date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (defaults to today)")
-):
-    """
-    Manually finalize LIVE data for a specific date.
-    Changes Status from "LIVE" to "FINAL" for all rows with the specified date.
-    
-    Query Parameters:
-        date: Optional date in YYYY-MM-DD format (defaults to today)
-    """
-    try:
-        if date:
-            target_date = date
-        else:
-            # Default to today
-            est = timezone('America/New_York')
-            now_est = datetime.now(est)
-            target_date = now_est.strftime('%Y-%m-%d')
-        
-        # Validate date format
-        try:
-            datetime.strptime(target_date, '%Y-%m-%d')
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid date format. Use YYYY-MM-DD format. Got: {target_date}"
-            )
-        
-        # Finalize LIVE data for the specified date
-        finalized_count = sheets_client.finalize_today_data(target_date)
-        
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "success",
-                "message": f"Finalized {finalized_count} LIVE rows for {target_date}",
-                "date": target_date,
-                "rows_finalized": finalized_count
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Failed to finalize date")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to finalize date: {str(e)}"
         ) from e
 
 

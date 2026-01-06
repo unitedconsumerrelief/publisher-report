@@ -98,419 +98,17 @@ class GoogleSheetsClient:
         logger.info("Appending row: %s", row)
         self.sheet.append_row(row, value_input_option="RAW")
 
-    def _ensure_status_column(self) -> None:
-        """
-        Ensure the Status column (Column F) exists in the header.
-        If header doesn't have Status column, add it.
-        """
-        header = self._get_header_row()
-        
-        # Check if Status column exists (should be column index 5, which is column F)
-        # We'll check if any column contains "Status" or if we need to add it
-        has_status = any(col.lower() == "status" for col in header)
-        
-        if not has_status:
-            # Add Status column if it doesn't exist
-            # If header is empty or has fewer than 6 columns, extend it
-            while len(header) < 6:
-                header.append("")
-            # Set column F (index 5) to "Status"
-            header[5] = "Status"
-            self._set_header_row(header)
-            logger.info("Added Status column to header")
-
-    def _delete_today_live_rows(self, today_date: str) -> int:
-        """
-        Delete all rows where Date = today_date AND Status = "LIVE".
-        
-        Args:
-            today_date: Date string in YYYY-MM-DD format
-            
-        Returns:
-            Number of rows deleted
-        """
-        try:
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:  # Only header or empty
-                return 0
-            
-            header = all_values[0]
-            
-            # Find column indices
-            date_col_idx = None
-            status_col_idx = None
-            
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                elif col_name.lower() == "status":
-                    status_col_idx = idx
-            
-            if date_col_idx is None:
-                logger.warning("Date column not found in header")
-                return 0
-            
-            # Collect row numbers to delete (1-indexed, but we skip header)
-            rows_to_delete = []
-            for row_idx, row in enumerate(all_values[1:], start=2):  # Start from row 2
-                # Ensure row has enough columns
-                if len(row) <= date_col_idx:
-                    continue
-                
-                row_date = str(row[date_col_idx]).strip()
-                
-                # Check if this is today's date
-                if row_date == today_date:
-                    # If Status column exists, check if it's LIVE
-                    if status_col_idx is not None and len(row) > status_col_idx:
-                        status = str(row[status_col_idx]).strip().upper()
-                        if status == "LIVE":
-                            rows_to_delete.append(row_idx)
-                    elif status_col_idx is None:
-                        # If Status column doesn't exist yet, assume all today's rows are LIVE
-                        # This handles the case where Status column was just added
-                        rows_to_delete.append(row_idx)
-            
-            # Delete rows in reverse order to maintain correct indices
-            if rows_to_delete:
-                rows_to_delete.sort(reverse=True)
-                for row_num in rows_to_delete:
-                    self.sheet.delete_rows(row_num)
-                logger.info(f"Deleted {len(rows_to_delete)} LIVE rows for date {today_date}")
-                return len(rows_to_delete)
-            
-            return 0
-            
-        except Exception as e:
-            logger.exception(f"Error deleting today's LIVE rows: {e}")
-            return 0
-
-    def _has_finalized_data_for_date(self, target_date: str) -> bool:
-        """
-        Check if there are any FINAL rows for the specified date.
-        
-        Args:
-            target_date: Date string in YYYY-MM-DD format
-            
-        Returns:
-            True if there are FINAL rows for this date, False otherwise
-        """
-        try:
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:
-                return False
-            
-            header = all_values[0]
-            
-            # Find column indices
-            date_col_idx = None
-            status_col_idx = None
-            
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                elif col_name.lower() == "status":
-                    status_col_idx = idx
-            
-            if date_col_idx is None or status_col_idx is None:
-                return False
-            
-            # Check if there are any FINAL rows for this date
-            for row in all_values[1:]:
-                if len(row) > date_col_idx:
-                    row_date = str(row[date_col_idx]).strip()
-                    if row_date == target_date:
-                        if len(row) > status_col_idx:
-                            status = str(row[status_col_idx]).strip().upper()
-                            if status == "FINAL":
-                                return True
-            
-            return False
-            
-        except Exception as e:
-            logger.exception(f"Error checking for finalized data: {e}")
-            return False
-
-    def write_today_hourly_payouts(self, publishers: List[Dict[str, Any]], today_date: str) -> None:
-        """
-        Write today's hourly publisher payout data, replacing any existing LIVE data for today.
-        
-        IMPORTANT: If today's data has already been finalized (Status = FINAL), 
-        this method will NOT write new LIVE data to prevent duplicates.
-        
-        Args:
-            publishers: List of dicts with "Publisher", "Campaign", "Payout", and "Date" keys
-            today_date: Date string in YYYY-MM-DD format for today
-        """
-        if not publishers:
-            logger.warning("No publisher data to write for hourly refresh")
-            return
-
-        # Ensure Status column exists
-        self._ensure_status_column()
-        
-        # CRITICAL: Check if today's data has already been finalized
-        # If it has, don't write new LIVE data to prevent duplicates
-        if self._has_finalized_data_for_date(today_date):
-            logger.warning(f"Today's data ({today_date}) has already been finalized. Skipping hourly refresh to prevent duplicates.")
-            return
-        
-        # Delete existing LIVE rows for today
-        deleted_count = self._delete_today_live_rows(today_date)
-        logger.info(f"Deleted {deleted_count} existing LIVE rows for {today_date}")
-
-        # Set the correct header first to ensure all columns exist
-        # Column order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status
-        header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
-        self._set_header_row(header)
-        
-        # Get header dict for column mapping
-        header_dict = {col.lower(): idx for idx, col in enumerate(header)}
-        
-        # Build rows with Status = "LIVE"
-        # Column order: Date (0), Publisher (1), Campaign (2), Payout (3), Completed Calls (4), Paid Calls (5), Status (6)
-        rows = []
-        for pub in publishers:
-            row = [
-                str(pub.get("Date", today_date)),           # Column A: Date
-                str(pub.get("Publisher", "")),              # Column B: Publisher
-                str(pub.get("Campaign", "")),               # Column C: Campaign
-                str(pub.get("Payout", "")),                 # Column D: Payout
-                str(pub.get("Completed Calls", "0")),       # Column E: Completed Calls
-                str(pub.get("Paid Calls", "0")),            # Column F: Paid Calls
-                "LIVE"                                      # Column G: Status
-            ]
-            rows.append(row)
-
-        # Append new rows
-        if rows:
-            try:
-                all_values = self.sheet.get_all_values()
-                next_row = len(all_values) + 1
-                
-                # Update header if needed to match our row structure
-                if len(header) < len(rows[0]):
-                    # Extend header
-                    while len(header) < len(rows[0]):
-                        header.append("")
-                    self._set_header_row(header)
-                
-                # Write rows
-                range_name = f"{next_row}:{next_row + len(rows) - 1}"
-                self.sheet.update(range_name, rows, value_input_option="RAW")
-                logger.info(f"Wrote {len(rows)} LIVE publisher rows for {today_date} (starting at row {next_row})")
-            except Exception as e:
-                logger.exception(f"Error writing hourly data: {e}")
-                raise
-
-    def finalize_live_data_for_dates(self, dates: List[str]) -> int:
-        """
-        Change Status from "LIVE" to "FINAL" for all rows with the specified dates.
-        
-        Args:
-            dates: List of date strings in YYYY-MM-DD format
-            
-        Returns:
-            Number of rows finalized
-        """
-        if not dates:
-            return 0
-            
-        try:
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:
-                return 0
-            
-            header = all_values[0]
-            
-            # Find column indices
-            date_col_idx = None
-            status_col_idx = None
-            
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                elif col_name.lower() == "status":
-                    status_col_idx = idx
-            
-            if date_col_idx is None:
-                logger.warning("Date column not found")
-                return 0
-            
-            if status_col_idx is None:
-                logger.warning("Status column not found - cannot finalize")
-                return 0
-            
-            dates_set = set(dates)  # For faster lookup
-            
-            # Find rows to update
-            rows_to_update = []
-            for row_idx, row in enumerate(all_values[1:], start=2):
-                if len(row) <= date_col_idx:
-                    continue
-                
-                row_date = str(row[date_col_idx]).strip()
-                if row_date in dates_set:
-                    if len(row) > status_col_idx:
-                        current_status = str(row[status_col_idx]).strip().upper()
-                        if current_status == "LIVE":
-                            rows_to_update.append((row_idx, row))
-            
-            # Update rows
-            if rows_to_update:
-                for row_idx, row in rows_to_update:
-                    # Update just the Status column
-                    cell_address = f"{chr(65 + status_col_idx)}{row_idx}"  # Convert to A1 notation
-                    self.sheet.update(cell_address, [["FINAL"]])
-                
-                logger.info(f"Finalized {len(rows_to_update)} LIVE rows for dates: {dates}")
-                return len(rows_to_update)
-            
-            return 0
-            
-        except Exception as e:
-            logger.exception(f"Error finalizing LIVE data: {e}")
-            return 0
-
-    def delete_all_rows_for_date(self, target_date: str) -> int:
-        """
-        Delete all rows (both LIVE and FINAL) for a specific date.
-        
-        Args:
-            target_date: Date string in YYYY-MM-DD format
-            
-        Returns:
-            Number of rows deleted
-        """
-        try:
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:
-                return 0
-            
-            header = all_values[0]
-            
-            # Find date column index
-            date_col_idx = None
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                    break
-            
-            if date_col_idx is None:
-                logger.warning("Date column not found")
-                return 0
-            
-            # Find all rows for this date
-            rows_to_delete = []
-            for row_idx, row in enumerate(all_values[1:], start=2):
-                if len(row) > date_col_idx:
-                    row_date = str(row[date_col_idx]).strip()
-                    if row_date == target_date:
-                        rows_to_delete.append(row_idx)
-            
-            # Delete rows in reverse order
-            if rows_to_delete:
-                rows_to_delete.sort(reverse=True)
-                for row_num in rows_to_delete:
-                    self.sheet.delete_rows(row_num)
-                logger.info(f"Deleted {len(rows_to_delete)} rows for {target_date}")
-                return len(rows_to_delete)
-            
-            return 0
-            
-        except Exception as e:
-            logger.exception(f"Error deleting rows for date: {e}")
-            return 0
-
-    def cleanup_duplicate_live_rows(self, target_date: str) -> int:
-        """
-        Remove LIVE rows for a date that already has FINAL rows.
-        This cleans up duplicates where both LIVE and FINAL exist for the same date.
-        
-        Args:
-            target_date: Date string in YYYY-MM-DD format
-            
-        Returns:
-            Number of LIVE rows deleted
-        """
-        try:
-            # First check if there are FINAL rows for this date
-            if not self._has_finalized_data_for_date(target_date):
-                logger.info(f"No FINAL rows found for {target_date}, nothing to clean up")
-                return 0
-            
-            # If FINAL rows exist, delete all LIVE rows for this date
-            all_values = self.sheet.get_all_values()
-            if len(all_values) <= 1:
-                return 0
-            
-            header = all_values[0]
-            
-            # Find column indices
-            date_col_idx = None
-            status_col_idx = None
-            
-            for idx, col_name in enumerate(header):
-                if col_name.lower() == "date":
-                    date_col_idx = idx
-                elif col_name.lower() == "status":
-                    status_col_idx = idx
-            
-            if date_col_idx is None or status_col_idx is None:
-                logger.warning("Date or Status column not found")
-                return 0
-            
-            # Find LIVE rows for this date
-            rows_to_delete = []
-            for row_idx, row in enumerate(all_values[1:], start=2):
-                if len(row) > date_col_idx:
-                    row_date = str(row[date_col_idx]).strip()
-                    if row_date == target_date:
-                        if len(row) > status_col_idx:
-                            status = str(row[status_col_idx]).strip().upper()
-                            if status == "LIVE":
-                                rows_to_delete.append(row_idx)
-            
-            # Delete LIVE rows in reverse order
-            if rows_to_delete:
-                rows_to_delete.sort(reverse=True)
-                for row_num in rows_to_delete:
-                    self.sheet.delete_rows(row_num)
-                logger.info(f"Cleaned up {len(rows_to_delete)} duplicate LIVE rows for {target_date}")
-                return len(rows_to_delete)
-            
-            return 0
-            
-        except Exception as e:
-            logger.exception(f"Error cleaning up duplicate LIVE rows: {e}")
-            return 0
-
-    def finalize_today_data(self, today_date: str) -> int:
-        """
-        Change Status from "LIVE" to "FINAL" for all rows with today's date.
-        
-        Args:
-            today_date: Date string in YYYY-MM-DD format
-            
-        Returns:
-            Number of rows finalized
-        """
-        return self.finalize_live_data_for_dates([today_date])
-
     def write_publisher_payouts(self, publishers: List[Dict[str, Any]], clear_existing: bool = True) -> None:
         """
         Write publisher payout data to the sheet.
         
         Args:
-            publishers: List of dicts with "Publisher", "Campaign", "Payout", and "Date" keys
+            publishers: List of dicts with "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", and "Date" keys
             clear_existing: If True, clear existing data before writing (default: True)
         """
         if not publishers:
             logger.warning("No publisher data to write")
             return
-
-        # Ensure Status column exists
-        self._ensure_status_column()
 
         # Define header order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status
         header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status"]
@@ -531,7 +129,7 @@ class GoogleSheetsClient:
             except Exception as e:
                 logger.warning(f"Could not clear existing data: {e}")
 
-        # Build rows with Status = "FINAL" for historical data
+        # Build rows
         rows = []
         for pub in publishers:
             row = [
@@ -553,66 +151,106 @@ class GoogleSheetsClient:
                 self.sheet.update(range_name, rows, value_input_option="RAW")
                 logger.info(f"Wrote {len(rows)} publisher rows to sheet (overwritten)")
             else:
-                # When appending historical data, we need to:
-                # 1. Finalize any LIVE data for the dates we're about to write
-                # 2. Delete ALL existing rows for those dates (to prevent duplicates)
-                # 3. Then write fresh data
+                # Append to the end of existing data
                 try:
+                    # Get all existing values to find the last row
                     all_values = self.sheet.get_all_values()
-                    if len(all_values) <= 1:
-                        # No existing data, just write
+                    next_row = len(all_values) + 1
+                    
+                    # Append rows starting from next_row
+                    if next_row == 2:
+                        # No data yet, start from row 2
                         range_name = f"2:{len(rows) + 1}"
                         self.sheet.update(range_name, rows, value_input_option="RAW")
-                        logger.info(f"Wrote {len(rows)} publisher rows to sheet (no existing data)")
                     else:
-                        # Get the dates we're about to write
-                        dates_to_process = set()
-                        for pub in publishers:
-                            pub_date = str(pub.get("Date", "")).strip()
-                            if pub_date:
-                                dates_to_process.add(pub_date)
-                        
-                        # Step 1: Finalize any LIVE data for these dates
-                        if dates_to_process:
-                            finalized_count = self.finalize_live_data_for_dates(list(dates_to_process))
-                            if finalized_count > 0:
-                                logger.info(f"Finalized {finalized_count} LIVE rows before writing historical data")
-                            
-                            # Step 2: Delete ALL existing rows for these dates (both LIVE and FINAL)
-                            # This ensures we don't have duplicates
-                            header = all_values[0]
-                            date_col_idx = None
-                            
-                            for idx, col_name in enumerate(header):
-                                if col_name.lower() == "date":
-                                    date_col_idx = idx
-                                    break
-                            
-                            if date_col_idx is not None:
-                                rows_to_delete = []
-                                for row_idx, row in enumerate(all_values[1:], start=2):
-                                    if len(row) > date_col_idx:
-                                        row_date = str(row[date_col_idx]).strip()
-                                        if row_date in dates_to_process:
-                                            rows_to_delete.append(row_idx)
-                                
-                                # Delete rows in reverse order
-                                if rows_to_delete:
-                                    rows_to_delete.sort(reverse=True)
-                                    for row_num in rows_to_delete:
-                                        self.sheet.delete_rows(row_num)
-                                    logger.info(f"Deleted {len(rows_to_delete)} existing rows for dates {dates_to_process} before writing fresh data")
-                        
-                        # Step 3: Append the new rows
-                        all_values = self.sheet.get_all_values()  # Refresh after deletions
-                        next_row = len(all_values) + 1
+                        # Append after existing data
                         range_name = f"{next_row}:{next_row + len(rows) - 1}"
                         self.sheet.update(range_name, rows, value_input_option="RAW")
-                        logger.info(f"Wrote {len(rows)} fresh publisher rows to sheet (starting at row {next_row}, old data removed)")
-                        
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (starting at row {next_row})")
                 except Exception as e:
-                    logger.warning(f"Could not append data with deduplication, trying direct append: {e}")
+                    logger.warning(f"Could not append data, trying direct append: {e}")
                     # Fallback: use append_row for each row
                     for row in rows:
                         self.sheet.append_row(row, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row fallback)")
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row)")
+
+    def write_hourly_publisher_payouts(self, publishers: List[Dict[str, Any]], hour_identifier: str) -> None:
+        """
+        Write publisher payout data to the sheet for a specific hour.
+        Clears existing data for that hour and writes fresh data.
+        
+        Args:
+            publishers: List of dicts with "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", and "Date" keys
+            hour_identifier: String identifier for the hour (e.g., "2026-01-02 14:00") used to identify which rows to clear
+        """
+        if not publishers:
+            logger.warning("No publisher data to write for hourly report")
+            return
+
+        # Define header order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status, Hour
+        header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status", "Hour"]
+        
+        # Set header row
+        self._set_header_row(header)
+        
+        # Get all existing data to find rows matching this hour
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) > 1:  # More than just header
+                # Find the Hour column index (should be last column, index 7)
+                hour_col_index = 7  # 0-based index for column H (8th column)
+                
+                # Find rows that match this hour identifier
+                rows_to_delete = []
+                for i in range(1, len(all_values)):  # Skip header row
+                    row = all_values[i]
+                    if len(row) > hour_col_index and row[hour_col_index] == hour_identifier:
+                        rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
+                
+                # Delete matching rows (delete from bottom to top to preserve indices)
+                if rows_to_delete:
+                    rows_to_delete.sort(reverse=True)
+                    for row_num in rows_to_delete:
+                        self.sheet.delete_rows(row_num)
+                    logger.info(f"Cleared {len(rows_to_delete)} existing rows for hour {hour_identifier}")
+        except Exception as e:
+            logger.warning(f"Could not clear existing hourly data: {e}")
+
+        # Build rows with hour identifier
+        rows = []
+        for pub in publishers:
+            row = [
+                str(pub.get("Date", "")),
+                str(pub.get("Publisher", "")),
+                str(pub.get("Campaign", "")),
+                str(pub.get("Payout", "")),
+                str(pub.get("Completed Calls", "0")),
+                str(pub.get("Paid Calls", "0")),
+                "FINAL",  # Status column
+                hour_identifier  # Hour identifier for tracking
+            ]
+            rows.append(row)
+
+        # Append new rows
+        if rows:
+            try:
+                # Get all existing values to find the last row
+                all_values = self.sheet.get_all_values()
+                next_row = len(all_values) + 1
+                
+                # Append rows starting from next_row
+                if next_row == 2:
+                    # No data yet, start from row 2
+                    range_name = f"2:{len(rows) + 1}"
+                    self.sheet.update(range_name, rows, value_input_option="RAW")
+                else:
+                    # Append after existing data
+                    range_name = f"{next_row}:{next_row + len(rows) - 1}"
+                    self.sheet.update(range_name, rows, value_input_option="RAW")
+                logger.info(f"Wrote {len(rows)} hourly publisher rows to sheet for hour {hour_identifier}")
+            except Exception as e:
+                logger.warning(f"Could not append hourly data, trying direct append: {e}")
+                # Fallback: use append_row for each row
+                for row in rows:
+                    self.sheet.append_row(row, value_input_option="RAW")
+                logger.info(f"Appended {len(rows)} hourly publisher rows to sheet (using append_row)")

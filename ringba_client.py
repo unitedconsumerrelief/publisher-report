@@ -53,7 +53,7 @@ class RingbaClient:
             timezone: Timezone for the report (default: "America/Los_Angeles")
         
         Returns:
-            List of dictionaries with Publisher, Campaign, Payout, and Date data
+            List of dictionaries with Publisher, Campaign, Payout, Completed Calls, Paid Calls, and Date data
         """
         # Default to yesterday if not provided
         if not report_start:
@@ -89,11 +89,11 @@ class RingbaClient:
                 },
                 {
                     "column": "completedCalls",
-                    "aggregateFunction": "count"
+                    "aggregateFunction": None
                 },
                 {
-                    "column": "payoutCount",
-                    "aggregateFunction": "count"
+                    "column": "paidCalls",
+                    "aggregateFunction": None
                 }
             ],
             "orderByColumns": [
@@ -154,17 +154,17 @@ class RingbaClient:
                                     except (ValueError, TypeError):
                                         payout_amount = 0.0
                                     
-                                    # Extract completedCalls (Completed Calls count)
+                                    # Extract completed calls
                                     completed_calls_str = record.get("completedCalls", "0")
                                     try:
-                                        completed_calls = int(float(completed_calls_str))
+                                        completed_calls = int(float(completed_calls_str)) if completed_calls_str else 0
                                     except (ValueError, TypeError):
                                         completed_calls = 0
                                     
-                                    # Extract payoutCount (Paid Calls count)
-                                    paid_calls_str = record.get("payoutCount", "0")
+                                    # Extract paid calls
+                                    paid_calls_str = record.get("paidCalls", "0")
                                     try:
-                                        paid_calls = int(float(paid_calls_str))
+                                        paid_calls = int(float(paid_calls_str)) if paid_calls_str else 0
                                     except (ValueError, TypeError):
                                         paid_calls = 0
                                     
