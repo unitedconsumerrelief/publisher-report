@@ -180,7 +180,7 @@ class GoogleSheetsClient:
         Clears existing data for that hour and writes fresh data.
         
         Args:
-            publishers: List of dicts with "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", and "Date" keys
+            publishers: List of dicts with "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Date", and "Status" keys
             hour_identifier: String identifier for the hour (e.g., "2026-01-02 14:00") used to identify which rows to clear
         """
         if not publishers:
@@ -226,7 +226,7 @@ class GoogleSheetsClient:
                 str(pub.get("Payout", "")),
                 str(pub.get("Completed Calls", "0")),
                 str(pub.get("Paid Calls", "0")),
-                "FINAL",  # Status column
+                str(pub.get("Status", "LIVE")),  # Status column (LIVE or FINAL)
                 hour_identifier  # Hour identifier for tracking
             ]
             rows.append(row)

@@ -164,12 +164,16 @@ async def run_hourly_report():
             # Update Date field to include hour information for hourly tab
             # Extract date from hour_start
             date_str = hour_start.strftime("%Y-%m-%d")
+            # Determine status: LIVE if within 9am-9pm window, FINAL otherwise
+            status = "LIVE" if (current_hour >= 9 and current_hour <= 21) else "FINAL"
+            
             for pub in publishers:
                 pub["Date"] = date_str
+                pub["Status"] = status  # Set status for each publisher
             
             # Write to hourly sheet (clears previous hour's data and writes fresh)
             hourly_sheets_client.write_hourly_publisher_payouts(publishers, hour_identifier)
-            logger.info(f"Hourly report completed: {len(publishers)} publishers synced for hour {hour_identifier}")
+            logger.info(f"Hourly report completed: {len(publishers)} publishers synced for hour {hour_identifier} with status {status}")
         else:
             logger.warning(f"Hourly report: No publisher data found for hour {hour_identifier}")
             

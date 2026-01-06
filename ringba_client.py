@@ -176,7 +176,10 @@ class RingbaClient:
                                         publishers_with_empty_campaign.add((report_date, publisher_name))
                                     
                                     # If this combination already exists, sum the values
+                                    # Note: This assumes the API might return duplicate records for the same publisher+campaign
+                                    # If the API already aggregates correctly, this could cause double-counting
                                     if key in publishers_dict:
+                                        logger.debug(f"Duplicate key found: {key}, summing values. Existing: Payout={publishers_dict[key]['Payout']}, Completed={publishers_dict[key]['Completed Calls']}, Paid={publishers_dict[key]['Paid Calls']}. New: Payout={payout_amount}, Completed={completed_calls}, Paid={paid_calls}")
                                         publishers_dict[key]["Payout"] += payout_amount
                                         publishers_dict[key]["Completed Calls"] += completed_calls
                                         publishers_dict[key]["Paid Calls"] += paid_calls
