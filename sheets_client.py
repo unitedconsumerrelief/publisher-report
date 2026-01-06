@@ -193,33 +193,24 @@ class GoogleSheetsClient:
         # Set header row
         self._set_header_row(header)
         
-        # Get all existing data to find rows matching this hour
-        # Clear ALL rows for this specific hour identifier to prevent duplicates
+        # Clear ALL previous LIVE rows - only keep the most up-to-date hour's data
+        # IMPORTANT: Do NOT delete rows with "FINAL" status - they are permanent
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) > 1:  # More than just header
-                # Find the Hour column index (should be last column, index 7)
-                hour_col_index = 7  # 0-based index for column H (8th column)
-                
-                # Find ALL rows that match this hour identifier (including partial matches)
-                # IMPORTANT: Do NOT delete rows with "FINAL" status - they are permanent
                 status_col_index = 6  # Status column index (0-based, column G)
                 rows_to_delete = []
+                
+                # Delete ALL rows with LIVE status (keep only FINAL rows)
                 for i in range(1, len(all_values)):  # Skip header row
                     row = all_values[i]
-                    # Check if row has hour column and matches the hour identifier
-                    if len(row) > hour_col_index:
-                        row_hour = str(row[hour_col_index]).strip()
-                        # Check if this row matches the hour identifier
-                        if row_hour == hour_identifier or row_hour.startswith(hour_identifier.split()[0] + " " + hour_identifier.split()[1]):
-                            # Check status - NEVER delete rows with "FINAL" status
-                            row_status = str(row[status_col_index]).strip() if len(row) > status_col_index else ""
-                            if row_status.upper() == "FINAL":
-                                logger.info(f"Skipping deletion of row {i + 1} with FINAL status for hour {hour_identifier}")
-                                continue  # Skip this row - it's finalized and should not be deleted
+                    if len(row) > status_col_index:
+                        row_status = str(row[status_col_index]).strip()
+                        # Only delete LIVE rows - protect FINAL rows
+                        if row_status.upper() == "LIVE":
                             rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
                 
-                # Delete matching rows (delete from bottom to top to preserve indices)
+                # Delete all LIVE rows (delete from bottom to top to preserve indices)
                 if rows_to_delete:
                     rows_to_delete.sort(reverse=True)
                     for row_num in rows_to_delete:
@@ -227,9 +218,9 @@ class GoogleSheetsClient:
                             self.sheet.delete_rows(row_num)
                         except Exception as e:
                             logger.warning(f"Could not delete row {row_num}: {e}")
-                    logger.info(f"Cleared {len(rows_to_delete)} existing rows for hour {hour_identifier}")
+                    logger.info(f"Cleared {len(rows_to_delete)} LIVE rows (keeping only FINAL rows and new data)")
                 else:
-                    logger.info(f"No existing rows found for hour {hour_identifier}")
+                    logger.info(f"No LIVE rows found to clear")
         except Exception as e:
             logger.warning(f"Could not clear existing hourly data: {e}")
 
