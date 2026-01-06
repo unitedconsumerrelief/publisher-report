@@ -515,3 +515,86 @@ async def test_hourly_report():
                 "message": f"Failed to run hourly report: {str(e)}"
             }
         )
+
+
+@app.get("/cleanup-hourly-duplicates")
+@app.post("/cleanup-hourly-duplicates")
+async def cleanup_hourly_duplicates():
+    """
+    Cleanup endpoint to remove duplicate entries for the same hour.
+    Keeps only the most recent entry for each hour.
+    """
+    try:
+        logger.info("Hourly duplicates cleanup triggered")
+        
+        # Get all data from the hourly sheet
+        all_values = hourly_sheets_client.sheet.get_all_values()
+        if len(all_values) <= 1:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": "No data to clean up",
+                    "rows_removed": 0
+                }
+            )
+        
+        hour_col_index = 7  # Hour column index
+        rows_by_hour = {}  # Track rows by hour identifier
+        
+        # Group rows by hour identifier
+        for i in range(1, len(all_values)):  # Skip header
+            row = all_values[i]
+            if len(row) > hour_col_index:
+                hour_identifier = str(row[hour_col_index]).strip()
+                if hour_identifier:
+                    if hour_identifier not in rows_by_hour:
+                        rows_by_hour[hour_identifier] = []
+                    rows_by_hour[hour_identifier].append(i + 1)  # 1-indexed row number
+        
+        # Find hours with duplicates
+        rows_to_delete = []
+        for hour_identifier, row_numbers in rows_by_hour.items():
+            if len(row_numbers) > 1:
+                # Keep the last row (most recent), delete the rest
+                row_numbers.sort()  # Sort ascending
+                rows_to_delete.extend(row_numbers[:-1])  # All except the last one
+                logger.info(f"Found {len(row_numbers)} rows for hour {hour_identifier}, keeping most recent, deleting {len(row_numbers) - 1}")
+        
+        # Delete duplicate rows (from bottom to top)
+        if rows_to_delete:
+            rows_to_delete.sort(reverse=True)
+            for row_num in rows_to_delete:
+                try:
+                    hourly_sheets_client.sheet.delete_rows(row_num)
+                except Exception as e:
+                    logger.warning(f"Could not delete row {row_num}: {e}")
+            
+            logger.info(f"Cleaned up {len(rows_to_delete)} duplicate rows")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": f"Cleaned up {len(rows_to_delete)} duplicate rows",
+                    "rows_removed": len(rows_to_delete)
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": "No duplicates found",
+                    "rows_removed": 0
+                }
+            )
+            
+    except Exception as e:
+        logger.exception("Failed to cleanup hourly duplicates")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to cleanup duplicates: {str(e)}"
+            }
+        )

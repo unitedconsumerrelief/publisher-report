@@ -194,25 +194,34 @@ class GoogleSheetsClient:
         self._set_header_row(header)
         
         # Get all existing data to find rows matching this hour
+        # Clear ALL rows for this specific hour identifier to prevent duplicates
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) > 1:  # More than just header
                 # Find the Hour column index (should be last column, index 7)
                 hour_col_index = 7  # 0-based index for column H (8th column)
                 
-                # Find rows that match this hour identifier
+                # Find ALL rows that match this hour identifier (including partial matches)
                 rows_to_delete = []
                 for i in range(1, len(all_values)):  # Skip header row
                     row = all_values[i]
-                    if len(row) > hour_col_index and row[hour_col_index] == hour_identifier:
-                        rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
+                    # Check if row has hour column and matches the hour identifier
+                    if len(row) > hour_col_index:
+                        row_hour = str(row[hour_col_index]).strip()
+                        if row_hour == hour_identifier or row_hour.startswith(hour_identifier.split()[0] + " " + hour_identifier.split()[1]):
+                            rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
                 
                 # Delete matching rows (delete from bottom to top to preserve indices)
                 if rows_to_delete:
                     rows_to_delete.sort(reverse=True)
                     for row_num in rows_to_delete:
-                        self.sheet.delete_rows(row_num)
+                        try:
+                            self.sheet.delete_rows(row_num)
+                        except Exception as e:
+                            logger.warning(f"Could not delete row {row_num}: {e}")
                     logger.info(f"Cleared {len(rows_to_delete)} existing rows for hour {hour_identifier}")
+                else:
+                    logger.info(f"No existing rows found for hour {hour_identifier}")
         except Exception as e:
             logger.warning(f"Could not clear existing hourly data: {e}")
 
