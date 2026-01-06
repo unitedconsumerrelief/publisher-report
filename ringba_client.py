@@ -92,7 +92,7 @@ class RingbaClient:
                     "aggregateFunction": "count"
                 },
                 {
-                    "column": "paidCalls",
+                    "column": "payoutCount",
                     "aggregateFunction": "count"
                 }
             ],
@@ -161,8 +161,8 @@ class RingbaClient:
                                     except (ValueError, TypeError):
                                         completed_calls = 0
                                     
-                                    # Extract paid calls
-                                    paid_calls_str = record.get("paidCalls", "0")
+                                    # Extract paid calls (payoutCount)
+                                    paid_calls_str = record.get("payoutCount", "0")
                                     try:
                                         paid_calls = int(float(paid_calls_str)) if paid_calls_str else 0
                                     except (ValueError, TypeError):
