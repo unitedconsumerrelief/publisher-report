@@ -253,4 +253,113 @@ class GoogleSheetsClient:
                 # Fallback: use append_row for each row
                 for row in rows:
                     self.sheet.append_row(row, value_input_option="RAW")
-                logger.info(f"Appended {len(rows)} hourly publisher rows to sheet (using append_row)")
+                    logger.info(f"Appended {len(rows)} hourly publisher rows to sheet (using append_row)")
+
+    def get_cumulative_publishers(
+        self, 
+        new_hour_publishers: List[Dict[str, Any]], 
+        current_hour_identifier: str,
+        date_str: str,
+        current_hour_num: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Calculate cumulative totals by summing data from 9am to current hour.
+        
+        Args:
+            new_hour_publishers: List of publishers for the current hour
+            current_hour_identifier: Hour identifier for current hour (e.g., "2026-01-06 12:00")
+            date_str: Date string (e.g., "2026-01-06")
+            current_hour_num: Current hour number (0-23)
+        
+        Returns:
+            List of publishers with cumulative totals from 9am to current hour
+        """
+        # Dictionary to store cumulative totals by (Publisher, Campaign)
+        cumulative_dict = {}
+        
+        # Get all existing data from previous hours (9am to previous hour)
+        try:
+            all_values = self.sheet.get_all_values()
+            if len(all_values) > 1:  # More than just header
+                hour_col_index = 7  # Hour column index
+                
+                # Process existing rows from 9am to previous hour
+                for i in range(1, len(all_values)):  # Skip header row
+                    row = all_values[i]
+                    if len(row) > hour_col_index:
+                        row_hour_identifier = row[hour_col_index]
+                        # Extract hour number from identifier (format: "YYYY-MM-DD HH:00")
+                        try:
+                            row_hour_str = row_hour_identifier.split(" ")[1] if " " in row_hour_identifier else ""
+                            row_hour_num = int(row_hour_str.split(":")[0]) if ":" in row_hour_str else -1
+                            
+                            # Only include hours from 9am (9) to previous hour (current_hour_num - 1)
+                            if 9 <= row_hour_num < current_hour_num:
+                                publisher = row[1] if len(row) > 1 else ""
+                                campaign = row[2] if len(row) > 2 else ""
+                                
+                                if publisher:  # Skip empty rows
+                                    key = (publisher, campaign)
+                                    
+                                    # Parse values
+                                    try:
+                                        payout = float(row[3]) if len(row) > 3 and row[3] else 0.0
+                                        completed_calls = int(float(row[4])) if len(row) > 4 and row[4] else 0
+                                        paid_calls = int(float(row[5])) if len(row) > 5 and row[5] else 0
+                                    except (ValueError, TypeError):
+                                        payout = 0.0
+                                        completed_calls = 0
+                                        paid_calls = 0
+                                    
+                                    # Add to cumulative totals
+                                    if key in cumulative_dict:
+                                        cumulative_dict[key]["Payout"] += payout
+                                        cumulative_dict[key]["Completed Calls"] += completed_calls
+                                        cumulative_dict[key]["Paid Calls"] += paid_calls
+                                    else:
+                                        cumulative_dict[key] = {
+                                            "Publisher": publisher,
+                                            "Campaign": campaign,
+                                            "Payout": payout,
+                                            "Completed Calls": completed_calls,
+                                            "Paid Calls": paid_calls
+                                        }
+                        except (ValueError, IndexError):
+                            continue  # Skip rows with invalid hour format
+        except Exception as e:
+            logger.warning(f"Could not read existing data for cumulative calculation: {e}")
+        
+        # Add current hour's data to cumulative totals
+        for pub in new_hour_publishers:
+            publisher = pub.get("Publisher", "")
+            campaign = pub.get("Campaign", "")
+            key = (publisher, campaign)
+            
+            payout = float(pub.get("Payout", 0))
+            completed_calls = int(pub.get("Completed Calls", 0))
+            paid_calls = int(pub.get("Paid Calls", 0))
+            
+            if key in cumulative_dict:
+                cumulative_dict[key]["Payout"] += payout
+                cumulative_dict[key]["Completed Calls"] += completed_calls
+                cumulative_dict[key]["Paid Calls"] += paid_calls
+            else:
+                cumulative_dict[key] = {
+                    "Publisher": publisher,
+                    "Campaign": campaign,
+                    "Payout": payout,
+                    "Completed Calls": completed_calls,
+                    "Paid Calls": paid_calls
+                }
+        
+        # Convert to list and add Date and Status from first publisher (they should all be the same)
+        cumulative_list = []
+        status = new_hour_publishers[0].get("Status", "LIVE") if new_hour_publishers else "LIVE"
+        
+        for key, pub_data in cumulative_dict.items():
+            pub_data["Date"] = date_str
+            pub_data["Status"] = status
+            cumulative_list.append(pub_data)
+        
+        logger.info(f"Calculated cumulative totals: {len(cumulative_list)} unique publishers from 9am to hour {current_hour_num}")
+        return cumulative_list

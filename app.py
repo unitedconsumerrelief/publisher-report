@@ -164,21 +164,108 @@ async def run_hourly_report():
             # Update Date field to include hour information for hourly tab
             # Extract date from hour_start
             date_str = hour_start.strftime("%Y-%m-%d")
-            # Determine status: LIVE if within 9am-9pm window, FINAL otherwise
-            status = "LIVE" if (current_hour >= 9 and current_hour <= 21) else "FINAL"
+            # Determine status: FINAL only at 9pm (the last hourly report of the day), LIVE for all others
+            # At 9:05 PM (21:05), we process hour 20 (8pm-8:59pm) - this is the last report, so status = FINAL
+            # All other reports (9am-8pm) should be LIVE
+            status = "FINAL" if current_hour == 21 else "LIVE"
             
             for pub in publishers:
                 pub["Date"] = date_str
                 pub["Status"] = status  # Set status for each publisher
             
-            # Write to hourly sheet (clears previous hour's data and writes fresh)
-            hourly_sheets_client.write_hourly_publisher_payouts(publishers, hour_identifier)
-            logger.info(f"Hourly report completed: {len(publishers)} publishers synced for hour {hour_identifier} with status {status}")
+            # Calculate cumulative data: fetch raw data for all hours from 9am to current hour and sum
+            cumulative_publishers = await get_cumulative_hourly_data(
+                date_str, previous_hour_num, status
+            )
+            
+            # Write to hourly sheet (clears previous hour's data and writes cumulative totals)
+            hourly_sheets_client.write_hourly_publisher_payouts(cumulative_publishers, hour_identifier)
+            logger.info(f"Hourly report completed: {len(cumulative_publishers)} publishers synced for hour {hour_identifier} with status {status} (cumulative from 9am)")
         else:
             logger.warning(f"Hourly report: No publisher data found for hour {hour_identifier}")
             
     except Exception as e:
         logger.exception(f"Failed to run hourly report: {e}")
+
+
+async def get_cumulative_hourly_data(
+    date_str: str,
+    current_hour_num: int,
+    status: str
+) -> List[Dict[str, Any]]:
+    """
+    Calculate cumulative totals by fetching raw data for all hours from 9am to current hour.
+    
+    Args:
+        date_str: Date string (e.g., "2026-01-06")
+        current_hour_num: Current hour number (9-20)
+        current_hour_publishers: Publishers data for current hour
+        status: Status to set (LIVE or FINAL)
+    
+    Returns:
+        List of publishers with cumulative totals from 9am to current hour
+    """
+    from pytz import timezone as tz
+    est = tz('America/New_York')
+    
+    # Dictionary to store cumulative totals by (Publisher, Campaign)
+    cumulative_dict = {}
+    
+    # Fetch raw data for each hour from 9am to current hour
+    # Note: current_hour_num is the hour we're processing (previous hour from now)
+    for hour_num in range(9, current_hour_num + 1):
+        try:
+            # Create hour time range
+            hour_start = est.localize(datetime.strptime(f"{date_str} {hour_num:02d}:00:00", "%Y-%m-%d %H:%M:%S"))
+            hour_end = hour_start.replace(minute=59, second=59, microsecond=999999)
+            
+            # Convert to UTC for API calls
+            hour_start_utc = hour_start.astimezone(UTC)
+            hour_end_utc = hour_end.astimezone(UTC)
+            
+            # Fetch data for this hour
+            hour_publishers = ringba_client.get_publisher_payouts(
+                report_start=hour_start_utc.isoformat().replace('+00:00', 'Z'),
+                report_end=hour_end_utc.isoformat().replace('+00:00', 'Z')
+            )
+            
+            # Add to cumulative totals
+            for pub in hour_publishers:
+                publisher = pub.get("Publisher", "")
+                campaign = pub.get("Campaign", "")
+                key = (publisher, campaign)
+                
+                payout = float(pub.get("Payout", 0))
+                completed_calls = int(pub.get("Completed Calls", 0))
+                paid_calls = int(pub.get("Paid Calls", 0))
+                
+                if key in cumulative_dict:
+                    cumulative_dict[key]["Payout"] += payout
+                    cumulative_dict[key]["Completed Calls"] += completed_calls
+                    cumulative_dict[key]["Paid Calls"] += paid_calls
+                else:
+                    cumulative_dict[key] = {
+                        "Publisher": publisher,
+                        "Campaign": campaign,
+                        "Payout": payout,
+                        "Completed Calls": completed_calls,
+                        "Paid Calls": paid_calls
+                    }
+            
+            logger.debug(f"Fetched data for hour {hour_num}: {len(hour_publishers)} publishers")
+        except Exception as e:
+            logger.warning(f"Failed to fetch data for hour {hour_num}: {e}")
+            continue
+    
+    # Convert to list and add Date and Status
+    cumulative_list = []
+    for key, pub_data in cumulative_dict.items():
+        pub_data["Date"] = date_str
+        pub_data["Status"] = status
+        cumulative_list.append(pub_data)
+    
+    logger.info(f"Calculated cumulative totals: {len(cumulative_list)} unique publishers from 9am to hour {current_hour_num}")
+    return cumulative_list
 
 
 @asynccontextmanager
@@ -392,3 +479,31 @@ async def ringba_webhook(request: Request):
         status_code=200,
         content={"status": "success", "message": "Webhook received and logged"},
     )
+
+
+@app.get("/test-hourly-report")
+@app.post("/test-hourly-report")
+async def test_hourly_report():
+    """
+    Test endpoint to manually trigger hourly report.
+    Useful for testing the hourly reporting functionality.
+    """
+    try:
+        logger.info("Manual hourly report test triggered")
+        await run_hourly_report()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Hourly report test completed. Check logs and Hourly tab for results."
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to run test hourly report")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to run hourly report: {str(e)}"
+            }
+        )
