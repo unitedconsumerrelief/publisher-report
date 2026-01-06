@@ -252,7 +252,11 @@ async def get_cumulative_hourly_data(
                         "Paid Calls": paid_calls
                     }
             
-            logger.debug(f"Fetched data for hour {hour_num}: {len(hour_publishers)} publishers")
+            logger.info(f"Fetched data for hour {hour_num}: {len(hour_publishers)} publishers")
+            # Log sample data for debugging
+            if hour_publishers:
+                sample = hour_publishers[0]
+                logger.info(f"Sample data for hour {hour_num}: Publisher={sample.get('Publisher')}, Payout={sample.get('Payout')}, Completed={sample.get('Completed Calls')}, Paid={sample.get('Paid Calls')}")
         except Exception as e:
             logger.warning(f"Failed to fetch data for hour {hour_num}: {e}")
             continue
@@ -265,6 +269,10 @@ async def get_cumulative_hourly_data(
         cumulative_list.append(pub_data)
     
     logger.info(f"Calculated cumulative totals: {len(cumulative_list)} unique publishers from 9am to hour {current_hour_num}")
+    # Log sample cumulative data for debugging
+    if cumulative_list:
+        for pub in cumulative_list[:3]:  # Log first 3 publishers
+            logger.info(f"Cumulative: Publisher={pub.get('Publisher')}, Campaign={pub.get('Campaign')}, Payout={pub.get('Payout')}, Completed={pub.get('Completed Calls')}, Paid={pub.get('Paid Calls')}")
     return cumulative_list
 
 
