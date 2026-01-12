@@ -188,6 +188,62 @@ async def run_hourly_report():
         logger.exception(f"Failed to run hourly report: {e}")
 
 
+async def finalize_previous_day_data():
+    """Scheduled task to finalize previous day's LIVE data at 5:05am EST."""
+    logger.info("Running scheduled finalization of previous day's data")
+    try:
+        # Get current time in EST timezone
+        est = timezone('America/New_York')
+        now_est = datetime.now(est)
+        
+        # Calculate previous day
+        previous_day = now_est - timedelta(days=1)
+        previous_day_str = previous_day.strftime("%Y-%m-%d")
+        
+        logger.info(f"Finalizing LIVE data from {previous_day_str}")
+        
+        # Get all data from hourly sheet
+        try:
+            all_values = hourly_sheets_client.sheet.get_all_values()
+            if len(all_values) <= 1:  # Only header or empty
+                logger.info("No data to finalize")
+                return
+            
+            status_col_index = 6  # Status column (0-based, column G)
+            date_col_index = 0   # Date column (0-based, column A)
+            
+            rows_to_update = []
+            for i in range(1, len(all_values)):  # Skip header row
+                row = all_values[i]
+                if len(row) > max(status_col_index, date_col_index):
+                    row_date = str(row[date_col_index]).strip()
+                    row_status = str(row[status_col_index]).strip().upper() if len(row) > status_col_index else ""
+                    
+                    # Only update LIVE rows from previous day
+                    if row_status == "LIVE" and row_date == previous_day_str:
+                        rows_to_update.append(i + 1)  # 1-indexed row number
+            
+            if rows_to_update:
+                # Update status to FINAL for all matching rows
+                # Update each row individually (gspread doesn't have a simple batch update for non-contiguous ranges)
+                for row_num in rows_to_update:
+                    try:
+                        status_range = f"G{row_num}"  # Column G, specific row
+                        hourly_sheets_client.sheet.update(status_range, [["FINAL"]], value_input_option="RAW")
+                    except Exception as e:
+                        logger.warning(f"Could not update row {row_num}: {e}")
+                
+                logger.info(f"Finalized {len(rows_to_update)} rows from {previous_day_str} (changed LIVE to FINAL)")
+            else:
+                logger.info(f"No LIVE rows found to finalize for {previous_day_str}")
+                
+        except Exception as e:
+            logger.exception(f"Failed to finalize previous day's data: {e}")
+            
+    except Exception as e:
+        logger.exception(f"Failed to run finalization job: {e}")
+
+
 async def get_cumulative_hourly_data(
     date_str: str,
     current_hour_num: int,
@@ -303,9 +359,20 @@ async def lifespan(app: FastAPI):
             replace_existing=True
         )
         
+        # Startup: Schedule finalization of previous day's data
+        # Run at 5:05 AM EST daily to finalize yesterday's LIVE data
+        # This allows users to pull "Today" data until 5am the next day
+        scheduler.add_job(
+            finalize_previous_day_data,
+            trigger=CronTrigger(hour=5, minute=5, timezone="America/New_York"),
+            id="finalize_previous_day",
+            replace_existing=True
+        )
+        
         scheduler.start()
         logger.info("Scheduler started - End-of-day report scheduled for 9:00 AM EST on weekdays (Monday-Friday)")
         logger.info("Scheduler started - Hourly report scheduled for minute 5 of every hour between 9am-9pm EST")
+        logger.info("Scheduler started - Previous day finalization scheduled for 5:05 AM EST daily")
     else:
         logger.info("Scheduler disabled - Use external cron or manual triggers")
     
