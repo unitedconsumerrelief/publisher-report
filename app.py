@@ -264,7 +264,7 @@ async def get_cumulative_hourly_data(
     from pytz import timezone as tz
     est = tz('America/New_York')
     
-    # Dictionary to store cumulative totals by (Publisher, Campaign)
+    # Dictionary to store cumulative totals by (Publisher, Campaign, Target)
     cumulative_dict = {}
     
     # Fetch raw data for each hour from 9am to current hour
@@ -289,7 +289,8 @@ async def get_cumulative_hourly_data(
             for pub in hour_publishers:
                 publisher = pub.get("Publisher", "")
                 campaign = pub.get("Campaign", "")
-                key = (publisher, campaign)
+                target = pub.get("Target", "")
+                key = (publisher, campaign, target)
                 
                 payout = float(pub.get("Payout", 0))
                 completed_calls = int(pub.get("Completed Calls", 0))
@@ -303,6 +304,7 @@ async def get_cumulative_hourly_data(
                     cumulative_dict[key] = {
                         "Publisher": publisher,
                         "Campaign": campaign,
+                        "Target": target,
                         "Payout": payout,
                         "Completed Calls": completed_calls,
                         "Paid Calls": paid_calls
