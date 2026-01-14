@@ -80,6 +80,10 @@ class RingbaClient:
                 {
                     "column": "campaignName",
                     "displayName": "Campaign"
+                },
+                {
+                    "column": "targetName",
+                    "displayName": "Target"
                 }
             ],
             "valueColumns": [
@@ -147,6 +151,9 @@ class RingbaClient:
                                     # Get campaign name (normalize empty to empty string)
                                     campaign_name = record.get("campaignName", "").strip() if record.get("campaignName") else ""
                                     
+                                    # Get target name (normalize empty to empty string)
+                                    target_name = record.get("targetName", "").strip() if record.get("targetName") else ""
+                                    
                                     # payoutAmount comes as a string, convert to float
                                     payout_amount_str = record.get("payoutAmount", "0")
                                     try:
@@ -169,7 +176,7 @@ class RingbaClient:
                                         paid_calls = 0
                                     
                                     # Create a unique key for deduplication
-                                    key = (report_date, publisher_name, campaign_name)
+                                    key = (report_date, publisher_name, campaign_name, target_name)
                                     
                                     # Track if this publisher has an empty campaign
                                     if not campaign_name:
@@ -187,6 +194,7 @@ class RingbaClient:
                                         publishers_dict[key] = {
                                             "Publisher": publisher_name,
                                             "Campaign": campaign_name,
+                                            "Target": target_name,
                                             "Payout": payout_amount,
                                             "Completed Calls": completed_calls,
                                             "Paid Calls": paid_calls,
@@ -197,7 +205,7 @@ class RingbaClient:
                             # This prevents double-counting when Ringba returns both grouped and ungrouped data
                             publishers_list = []
                             for key, pub_data in publishers_dict.items():
-                                date, publisher, campaign = key
+                                date, publisher, campaign, target = key
                                 
                                 # If this is an empty campaign record
                                 if not campaign:
