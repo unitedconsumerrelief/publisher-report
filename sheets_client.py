@@ -188,13 +188,8 @@ class GoogleSheetsClient:
             logger.warning("No publisher data to write for hourly report")
             return
 
-<<<<<<< HEAD
-        # Define header order: Date, Publisher, Campaign, Payout, Completed Calls, Paid Calls, Status, Hour
-        header = ["Date", "Publisher", "Campaign", "Payout", "Completed Calls", "Paid Calls", "Status", "Hour"]
-=======
         # Define header order: Date, Publisher, Campaign, Target, Payout, Completed Calls, Paid Calls, Status, Hour
         header = ["Date", "Publisher", "Campaign", "Target", "Payout", "Completed Calls", "Paid Calls", "Status", "Hour"]
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
         
         # Set header row
         self._set_header_row(header)
@@ -204,11 +199,7 @@ class GoogleSheetsClient:
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) > 1:  # More than just header
-<<<<<<< HEAD
-                status_col_index = 6  # Status column index (0-based, column G)
-=======
                 status_col_index = 7  # Status column index (0-based, column H, updated for Target column)
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                 rows_to_delete = []
                 
                 # Delete ALL rows with LIVE status (keep only FINAL rows)
@@ -241,10 +232,7 @@ class GoogleSheetsClient:
                 str(pub.get("Date", "")),
                 str(pub.get("Publisher", "")),
                 str(pub.get("Campaign", "")),
-<<<<<<< HEAD
-=======
                 str(pub.get("Target", "")),
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                 str(pub.get("Payout", "")),
                 str(pub.get("Completed Calls", "0")),
                 str(pub.get("Paid Calls", "0")),
@@ -303,11 +291,7 @@ class GoogleSheetsClient:
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) > 1:  # More than just header
-<<<<<<< HEAD
-                hour_col_index = 7  # Hour column index
-=======
                 hour_col_index = 8  # Hour column index (updated for Target column)
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                 
                 # Process existing rows from 9am to previous hour
                 for i in range(1, len(all_values)):  # Skip header row
@@ -323,17 +307,6 @@ class GoogleSheetsClient:
                             if 9 <= row_hour_num < current_hour_num:
                                 publisher = row[1] if len(row) > 1 else ""
                                 campaign = row[2] if len(row) > 2 else ""
-<<<<<<< HEAD
-                                
-                                if publisher:  # Skip empty rows
-                                    key = (publisher, campaign)
-                                    
-                                    # Parse values
-                                    try:
-                                        payout = float(row[3]) if len(row) > 3 and row[3] else 0.0
-                                        completed_calls = int(float(row[4])) if len(row) > 4 and row[4] else 0
-                                        paid_calls = int(float(row[5])) if len(row) > 5 and row[5] else 0
-=======
                                 target = row[3] if len(row) > 3 else ""
                                 
                                 if publisher:  # Skip empty rows
@@ -344,7 +317,6 @@ class GoogleSheetsClient:
                                         payout = float(row[4]) if len(row) > 4 and row[4] else 0.0
                                         completed_calls = int(float(row[5])) if len(row) > 5 and row[5] else 0
                                         paid_calls = int(float(row[6])) if len(row) > 6 and row[6] else 0
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                                     except (ValueError, TypeError):
                                         payout = 0.0
                                         completed_calls = 0
@@ -359,10 +331,7 @@ class GoogleSheetsClient:
                                         cumulative_dict[key] = {
                                             "Publisher": publisher,
                                             "Campaign": campaign,
-<<<<<<< HEAD
-=======
                                             "Target": target,
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                                             "Payout": payout,
                                             "Completed Calls": completed_calls,
                                             "Paid Calls": paid_calls
@@ -376,12 +345,8 @@ class GoogleSheetsClient:
         for pub in new_hour_publishers:
             publisher = pub.get("Publisher", "")
             campaign = pub.get("Campaign", "")
-<<<<<<< HEAD
-            key = (publisher, campaign)
-=======
             target = pub.get("Target", "")
             key = (publisher, campaign, target)
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
             
             payout = float(pub.get("Payout", 0))
             completed_calls = int(pub.get("Completed Calls", 0))
@@ -395,10 +360,7 @@ class GoogleSheetsClient:
                 cumulative_dict[key] = {
                     "Publisher": publisher,
                     "Campaign": campaign,
-<<<<<<< HEAD
-=======
                     "Target": target,
->>>>>>> d00a7fd (Add Target field to reporting - groups payout by Publisher, Campaign, and Target)
                     "Payout": payout,
                     "Completed Calls": completed_calls,
                     "Paid Calls": paid_calls
