@@ -196,34 +196,53 @@ class GoogleSheetsClient:
         
         # Clear ALL previous LIVE rows - only keep the most up-to-date hour's data
         # IMPORTANT: Do NOT delete rows with "FINAL" status - they are permanent
+        # Strategy: Get all rows, separate FINAL from LIVE, clear all data, write back FINAL + new LIVE
         try:
             all_values = self.sheet.get_all_values()
             if len(all_values) > 1:  # More than just header
-                status_col_index = 7  # Status column index (0-based, column H, updated for Target column)
-                rows_to_delete = []
+                status_col_index = 7  # Status column index (0-based, column H)
+                final_rows = []  # Keep FINAL rows
+                live_row_count = 0
                 
-                # Delete ALL rows with LIVE status (keep only FINAL rows)
+                # Separate FINAL rows from LIVE rows
                 for i in range(1, len(all_values)):  # Skip header row
                     row = all_values[i]
                     if len(row) > status_col_index:
-                        row_status = str(row[status_col_index]).strip()
-                        # Only delete LIVE rows - protect FINAL rows
-                        if row_status.upper() == "LIVE":
-                            rows_to_delete.append(i + 1)  # +1 because sheet rows are 1-indexed
+                        row_status = str(row[status_col_index]).strip().upper()
+                        if row_status == "FINAL":
+                            # Keep FINAL rows - they are permanent
+                            final_rows.append(row)
+                        else:
+                            # Count LIVE rows to be removed
+                            live_row_count += 1
                 
-                # Delete all LIVE rows (delete from bottom to top to preserve indices)
-                if rows_to_delete:
-                    rows_to_delete.sort(reverse=True)
-                    for row_num in rows_to_delete:
-                        try:
-                            self.sheet.delete_rows(row_num)
-                        except Exception as e:
-                            logger.warning(f"Could not delete row {row_num}: {e}")
-                    logger.info(f"Cleared {len(rows_to_delete)} LIVE rows (keeping only FINAL rows and new data)")
+                # If there are LIVE rows to remove, clear all data rows and write back FINAL rows
+                if live_row_count > 0:
+                    # Clear all data rows (from row 2 onwards)
+                    last_row = len(all_values)
+                    if last_row > 1:
+                        range_to_clear = f"2:{last_row}"
+                        self.sheet.batch_clear([range_to_clear])
+                        logger.info(f"Cleared {live_row_count} LIVE rows (keeping {len(final_rows)} FINAL rows)")
+                    
+                    # Write back FINAL rows if any exist
+                    if final_rows:
+                        # Pad rows to match header length (9 columns)
+                        padded_final_rows = []
+                        for row in final_rows:
+                            padded_row = row[:9] if len(row) >= 9 else row + [""] * (9 - len(row))
+                            padded_final_rows.append(padded_row)
+                        
+                        # Write FINAL rows starting from row 2
+                        if padded_final_rows:
+                            range_name = f"2:{len(padded_final_rows) + 1}"
+                            self.sheet.update(range_name, padded_final_rows, value_input_option="RAW")
+                            logger.info(f"Restored {len(padded_final_rows)} FINAL rows")
                 else:
-                    logger.info(f"No LIVE rows found to clear")
+                    logger.info(f"No LIVE rows found to clear (keeping {len(final_rows)} FINAL rows)")
         except Exception as e:
             logger.warning(f"Could not clear existing hourly data: {e}")
+            # If clearing fails, still try to write new data (it will append)
 
         # Build rows with hour identifier
         rows = []
@@ -241,29 +260,30 @@ class GoogleSheetsClient:
             ]
             rows.append(row)
 
-        # Append new rows
+        # Write new LIVE rows after FINAL rows (if any)
         if rows:
             try:
-                # Get all existing values to find the last row
+                # Get current data to find where to write (after FINAL rows)
                 all_values = self.sheet.get_all_values()
                 next_row = len(all_values) + 1
                 
-                # Append rows starting from next_row
+                # If we have data (FINAL rows), append after them
+                # If no data, start from row 2
                 if next_row == 2:
                     # No data yet, start from row 2
                     range_name = f"2:{len(rows) + 1}"
                     self.sheet.update(range_name, rows, value_input_option="RAW")
                 else:
-                    # Append after existing data
+                    # Append after existing data (FINAL rows)
                     range_name = f"{next_row}:{next_row + len(rows) - 1}"
                     self.sheet.update(range_name, rows, value_input_option="RAW")
                 logger.info(f"Wrote {len(rows)} hourly publisher rows to sheet for hour {hour_identifier}")
             except Exception as e:
-                logger.warning(f"Could not append hourly data, trying direct append: {e}")
+                logger.warning(f"Could not write hourly data, trying direct append: {e}")
                 # Fallback: use append_row for each row
                 for row in rows:
                     self.sheet.append_row(row, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} hourly publisher rows to sheet (using append_row)")
+                logger.info(f"Appended {len(rows)} hourly publisher rows to sheet (using append_row)")
 
     def get_cumulative_publishers(
         self, 

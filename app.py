@@ -189,18 +189,24 @@ async def run_hourly_report():
 
 
 async def finalize_previous_day_data():
-    """Scheduled task to finalize previous day's LIVE data at 5:05am EST."""
+    """
+    Scheduled task to finalize previous day's LIVE data at 5:05am EST.
+    
+    IMPORTANT: This only finalizes the PREVIOUS day's data, not today's data.
+    This ensures LIVE data remains available until 5am the next day.
+    """
     logger.info("Running scheduled finalization of previous day's data")
     try:
         # Get current time in EST timezone
         est = timezone('America/New_York')
         now_est = datetime.now(est)
+        current_date_str = now_est.strftime("%Y-%m-%d")
         
-        # Calculate previous day
+        # Calculate previous day (the day we're finalizing)
         previous_day = now_est - timedelta(days=1)
         previous_day_str = previous_day.strftime("%Y-%m-%d")
         
-        logger.info(f"Finalizing LIVE data from {previous_day_str}")
+        logger.info(f"Finalizing LIVE data from {previous_day_str} (current date: {current_date_str})")
         
         # Get all data from hourly sheet
         try:
@@ -209,33 +215,60 @@ async def finalize_previous_day_data():
                 logger.info("No data to finalize")
                 return
             
-            status_col_index = 6  # Status column (0-based, column G)
-            date_col_index = 0   # Date column (0-based, column A)
+            # Column indices (0-based):
+            # Column A (0): Date
+            # Column H (7): Status
+            status_col_index = 7  # Status column (0-based, column H, updated for Target column)
+            date_col_index = 0    # Date column (0-based, column A)
             
             rows_to_update = []
+            rows_skipped_today = 0
+            rows_skipped_final = 0
+            
             for i in range(1, len(all_values)):  # Skip header row
                 row = all_values[i]
-                if len(row) > max(status_col_index, date_col_index):
-                    row_date = str(row[date_col_index]).strip()
-                    row_status = str(row[status_col_index]).strip().upper() if len(row) > status_col_index else ""
-                    
-                    # Only update LIVE rows from previous day
-                    if row_status == "LIVE" and row_date == previous_day_str:
-                        rows_to_update.append(i + 1)  # 1-indexed row number
+                if len(row) <= max(status_col_index, date_col_index):
+                    continue
+                
+                row_date = str(row[date_col_index]).strip()
+                row_status = str(row[status_col_index]).strip().upper() if len(row) > status_col_index else ""
+                
+                # Safety check: NEVER finalize today's data - only previous day
+                if row_date == current_date_str:
+                    rows_skipped_today += 1
+                    logger.debug(f"Skipping row {i+1}: Date is today ({current_date_str}), not finalizing")
+                    continue
+                
+                # Only update LIVE rows from previous day (not FINAL rows)
+                if row_status == "LIVE" and row_date == previous_day_str:
+                    rows_to_update.append(i + 1)  # 1-indexed row number
+                elif row_status == "FINAL":
+                    rows_skipped_final += 1
+            
+            if rows_skipped_today > 0:
+                logger.info(f"Skipped {rows_skipped_today} rows from today ({current_date_str}) - keeping them LIVE")
             
             if rows_to_update:
                 # Update status to FINAL for all matching rows
-                # Update each row individually (gspread doesn't have a simple batch update for non-contiguous ranges)
+                # Update each row individually (gspread's reliable method)
+                successful_updates = 0
+                failed_updates = 0
+                
                 for row_num in rows_to_update:
                     try:
-                        status_range = f"G{row_num}"  # Column G, specific row
+                        status_range = f"H{row_num}"  # Column H (Status), specific row
                         hourly_sheets_client.sheet.update(status_range, [["FINAL"]], value_input_option="RAW")
-                    except Exception as e:
-                        logger.warning(f"Could not update row {row_num}: {e}")
+                        successful_updates += 1
+                    except Exception as update_error:
+                        failed_updates += 1
+                        logger.warning(f"Could not update row {row_num}: {update_error}")
                 
-                logger.info(f"Finalized {len(rows_to_update)} rows from {previous_day_str} (changed LIVE to FINAL)")
+                if successful_updates > 0:
+                    logger.info(f"Finalized {successful_updates} rows from {previous_day_str} (changed LIVE to FINAL)")
+                if failed_updates > 0:
+                    logger.warning(f"Failed to finalize {failed_updates} rows from {previous_day_str}")
             else:
-                logger.info(f"No LIVE rows found to finalize for {previous_day_str}")
+                logger.info(f"No LIVE rows found to finalize for {previous_day_str} (skipped {rows_skipped_final} FINAL rows, {rows_skipped_today} today rows)")
                 
         except Exception as e:
             logger.exception(f"Failed to finalize previous day's data: {e}")
