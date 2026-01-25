@@ -152,28 +152,66 @@ class GoogleSheetsClient:
                 self.sheet.update(range_name, rows, value_input_option="RAW")
                 logger.info(f"Wrote {len(rows)} publisher rows to sheet (overwritten)")
             else:
-                # Append to the end of existing data
+                # Append to the end of existing data, but filter out duplicates
                 try:
-                    # Get all existing values to find the last row
+                    # Get all existing values to find the last row and check for duplicates
                     all_values = self.sheet.get_all_values()
-                    next_row = len(all_values) + 1
+                    date_col_index = 0  # Column A: Date
+                    publisher_col_index = 1  # Column B: Publisher
+                    campaign_col_index = 2  # Column C: Campaign
+                    target_col_index = 3  # Column D: Target
                     
-                    # Append rows starting from next_row
-                    if next_row == 2:
-                        # No data yet, start from row 2
-                        range_name = f"2:{len(rows) + 1}"
-                        self.sheet.update(range_name, rows, value_input_option="RAW")
+                    # Build set of existing (Date, Publisher, Campaign, Target) combinations
+                    existing_keys = set()
+                    for i in range(1, len(all_values)):  # Skip header row
+                        row = all_values[i]
+                        if len(row) > max(date_col_index, publisher_col_index, campaign_col_index, target_col_index):
+                            date = str(row[date_col_index]).strip() if len(row) > date_col_index else ""
+                            publisher = str(row[publisher_col_index]).strip() if len(row) > publisher_col_index else ""
+                            campaign = str(row[campaign_col_index]).strip() if len(row) > campaign_col_index else ""
+                            target = str(row[target_col_index]).strip() if len(row) > target_col_index else ""
+                            key = (date, publisher, campaign, target)
+                            existing_keys.add(key)
+                    
+                    # Filter out rows that already exist
+                    new_rows = []
+                    skipped_count = 0
+                    for row in rows:
+                        date = str(row[date_col_index]).strip() if len(row) > date_col_index else ""
+                        publisher = str(row[publisher_col_index]).strip() if len(row) > publisher_col_index else ""
+                        campaign = str(row[campaign_col_index]).strip() if len(row) > campaign_col_index else ""
+                        target = str(row[target_col_index]).strip() if len(row) > target_col_index else ""
+                        key = (date, publisher, campaign, target)
+                        
+                        if key not in existing_keys:
+                            new_rows.append(row)
+                        else:
+                            skipped_count += 1
+                    
+                    if skipped_count > 0:
+                        logger.info(f"Skipped {skipped_count} duplicate rows (already exist in sheet)")
+                    
+                    if new_rows:
+                        next_row = len(all_values) + 1
+                        
+                        # Append new rows starting from next_row
+                        if next_row == 2:
+                            # No data yet, start from row 2
+                            range_name = f"2:{len(new_rows) + 1}"
+                            self.sheet.update(range_name, new_rows, value_input_option="RAW")
+                        else:
+                            # Append after existing data
+                            range_name = f"{next_row}:{next_row + len(new_rows) - 1}"
+                            self.sheet.update(range_name, new_rows, value_input_option="RAW")
+                        logger.info(f"Appended {len(new_rows)} new publisher rows to sheet (starting at row {next_row})")
                     else:
-                        # Append after existing data
-                        range_name = f"{next_row}:{next_row + len(rows) - 1}"
-                        self.sheet.update(range_name, rows, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} publisher rows to sheet (starting at row {next_row})")
+                        logger.info("No new rows to append (all data already exists)")
                 except Exception as e:
                     logger.warning(f"Could not append data, trying direct append: {e}")
-                    # Fallback: use append_row for each row
+                    # Fallback: use append_row for each row (no duplicate checking in fallback)
                     for row in rows:
                         self.sheet.append_row(row, value_input_option="RAW")
-                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row)")
+                    logger.info(f"Appended {len(rows)} publisher rows to sheet (using append_row fallback)")
 
     def write_hourly_publisher_payouts(self, publishers: List[Dict[str, Any]], hour_identifier: str) -> None:
         """

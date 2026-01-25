@@ -623,6 +623,135 @@ async def test_hourly_report():
         )
 
 
+@app.get("/test-daily-report")
+@app.post("/test-daily-report")
+async def test_daily_report():
+    """
+    Test endpoint to manually trigger daily report.
+    Useful for testing the daily reporting functionality or pulling missing dates.
+    """
+    try:
+        logger.info("Manual daily report test triggered")
+        await run_end_of_day_report()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Daily report test completed. Check logs and Sheet1 tab for results."
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to run test daily report")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to run daily report: {str(e)}"
+            }
+        )
+
+
+@app.get("/sync-date")
+@app.post("/sync-date")
+async def sync_date(
+    date: str = Query(..., description="Date in YYYY-MM-DD format (e.g., 2026-01-23)"),
+    clear_existing: bool = Query(False, description="Clear existing data for this date before writing")
+):
+    """
+    Pull publisher payout data for a specific date and write to Google Sheets.
+    Handles timezone conversion correctly (EST timezone).
+    
+    Args:
+        date: Date string in YYYY-MM-DD format
+        clear_existing: If True, clears existing data for this date before writing
+    """
+    try:
+        # Parse date and create time range in EST
+        est = timezone('America/New_York')
+        try:
+            date_obj = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": f"Invalid date format. Use YYYY-MM-DD (e.g., 2026-01-23)"}
+            )
+        
+        # Create date range for the specified date in EST
+        report_start = est.localize(date_obj.replace(hour=0, minute=0, second=0, microsecond=0))
+        report_end = est.localize(date_obj.replace(hour=23, minute=59, second=59, microsecond=999999))
+        
+        # Convert to UTC for API calls
+        report_start_utc = report_start.astimezone(UTC)
+        report_end_utc = report_end.astimezone(UTC)
+        
+        logger.info(f"Pulling data for date {date} (EST): {report_start_utc} to {report_end_utc}")
+        
+        # Fetch data from Ringba
+        publishers = ringba_client.get_publisher_payouts(
+            report_start=report_start_utc.isoformat().replace('+00:00', 'Z'),
+            report_end=report_end_utc.isoformat().replace('+00:00', 'Z')
+        )
+        
+        if not publishers:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": f"No publisher data found for date {date}",
+                    "publishers_count": 0
+                }
+            )
+        
+        # If clear_existing is True, remove existing rows for this date first
+        if clear_existing:
+            try:
+                all_values = sheets_client.sheet.get_all_values()
+                date_col_index = 0  # Column A: Date
+                rows_to_delete = []
+                
+                for i in range(1, len(all_values)):  # Skip header row
+                    row = all_values[i]
+                    if len(row) > date_col_index:
+                        row_date = str(row[date_col_index]).strip()
+                        if row_date == date:
+                            rows_to_delete.append(i + 1)  # 1-indexed row number
+                
+                if rows_to_delete:
+                    # Delete rows from bottom to top to preserve indices
+                    rows_to_delete.sort(reverse=True)
+                    for row_num in rows_to_delete:
+                        try:
+                            sheets_client.sheet.delete_rows(row_num)
+                        except Exception as e:
+                            logger.warning(f"Could not delete row {row_num}: {e}")
+                    logger.info(f"Cleared {len(rows_to_delete)} existing rows for date {date}")
+            except Exception as e:
+                logger.warning(f"Could not clear existing data for date {date}: {e}")
+        
+        # Write to Google Sheets (with duplicate prevention)
+        sheets_client.write_publisher_payouts(publishers, clear_existing=False)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Synced {len(publishers)} publishers for date {date} to Google Sheets",
+                "publishers_count": len(publishers),
+                "date": date
+            }
+        )
+        
+    except Exception as e:
+        logger.exception(f"Failed to sync date {date}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to sync date {date}: {str(e)}"
+            }
+        )
+
+
 @app.get("/cleanup-hourly-duplicates")
 @app.post("/cleanup-hourly-duplicates")
 async def cleanup_hourly_duplicates():
