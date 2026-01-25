@@ -164,10 +164,9 @@ async def run_hourly_report():
             # Update Date field to include hour information for hourly tab
             # Extract date from hour_start
             date_str = hour_start.strftime("%Y-%m-%d")
-            # Determine status: FINAL only at 9pm (the last hourly report of the day), LIVE for all others
-            # At 9:05 PM (21:05), we process hour 20 (8pm-8:59pm) - this is the last report, so status = FINAL
-            # All other reports (9am-8pm) should be LIVE
-            status = "FINAL" if current_hour == 21 else "LIVE"
+            # IMPORTANT: Always set status to LIVE - the finalization job at 5:05 AM next day will convert to FINAL
+            # This ensures LIVE data remains available until 5am the next day
+            status = "LIVE"
             
             for pub in publishers:
                 pub["Date"] = date_str
